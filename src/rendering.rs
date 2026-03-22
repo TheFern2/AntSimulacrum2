@@ -105,8 +105,10 @@ fn draw_ants(camera: &Camera, ants: &[Ant]) {
     }
 }
 
-pub fn draw_debug_overlay(fps: f32, world: &World, ant_count: usize) {
+pub fn draw_debug_overlay(fps: f32, world: &World, ant_count: usize, decay_rate: f32) {
     draw_text(&format!("FPS: {:.0}", fps), 8.0, 20.0, 20.0, WHITE);
     draw_text(&format!("Ants: {}", ant_count), 8.0, 42.0, 20.0, WHITE);
     draw_text(&format!("Food stored: {:.0}", world.food_stored), 8.0, 64.0, 20.0, WHITE);
+    draw_text(&format!("Decay: {:.3}/s  [Shift+↑/↓]", decay_rate), 8.0, 86.0, 18.0, GRAY);
+    draw_text("Shift+R: reset", 8.0, 106.0, 18.0, GRAY);
 }

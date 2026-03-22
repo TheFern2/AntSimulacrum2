@@ -1,5 +1,5 @@
 pub const MAX_INTENSITY: f32 = 10.0;
-const DECAY_RATE: f32 = 0.015; // per second
+pub const DEFAULT_DECAY_RATE: f32 = 0.13;
 
 pub struct PheromoneGrid {
     pub width: usize,
@@ -52,13 +52,14 @@ impl PheromoneGrid {
         }
     }
 
-    pub fn decay(&mut self, dt: f32) {
-        let d = DECAY_RATE * dt;
+    pub fn decay(&mut self, dt: f32, rate: f32) {
+        let home_d = rate * dt;
+        let food_d = rate * 2.0 * dt; // to_food evaporates 2× faster (biologically accurate)
         for v in self.to_home.iter_mut() {
-            *v = (*v - d).max(0.0);
+            *v = (*v - home_d).max(0.0);
         }
         for v in self.to_food.iter_mut() {
-            *v = (*v - d).max(0.0);
+            *v = (*v - food_d).max(0.0);
         }
     }
 

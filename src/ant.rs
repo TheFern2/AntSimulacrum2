@@ -7,8 +7,8 @@ const ANT_SPEED: f32 = 55.0; // pixels / second
 const WANDER_NOISE: f32 = std::f32::consts::PI / 6.0; // ±30° per tick jitter
 const NUM_SAMPLE_DIRS: usize = 32;
 const SAMPLE_DIST: f32 = 28.0; // pixels ahead for pheromone sampling
-const DEPOSIT_INTERVAL: f32 = 0.06; // seconds between deposits
-const NEST_RADIUS: f32 = 22.0;
+const DEPOSIT_INTERVAL: f32 = 0.12; // seconds between deposits
+const NEST_RADIUS: f32 = 44.0; // matches visual outer ring (base_r * 2.2 at zoom=1)
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum AntState {
@@ -50,14 +50,28 @@ impl Ant {
             let gx = (self.position.x / world.cell_size) as i32;
             let gy = (self.position.y / world.cell_size) as i32;
             match self.state {
-                AntState::Foraging => pheromones.deposit_home(gx, gy, 0.6),
-                AntState::Returning => pheromones.deposit_food(gx, gy, 0.6),
+                AntState::Foraging => pheromones.deposit_home(gx, gy, 0.3),
+                AntState::Returning => pheromones.deposit_food(gx, gy, 0.3),
             }
         }
 
         // Pheromone steering (unless liberty roll fires)
         if rng.r#gen::<f32>() >= self.liberty {
             self.steer_by_pheromone(pheromones, world);
+        }
+
+        // Returning ants: direct pull toward nest (breaks pheromone-ring orbiting)
+        // Real ants use path integration alongside trail following.
+        if self.state == AntState::Returning {
+            let to_nest = world.nest_pos - self.position;
+            let dist = to_nest.length();
+            if dist > 1.0 {
+                let nest_angle = f32::atan2(to_nest.y, to_nest.x);
+                // Pull grows stronger as ant approaches nest (0.15 far → 0.6 close)
+                let pull = 0.15 + 0.45 * (1.0 - (dist / 300.0).min(1.0));
+                let diff = angle_diff(nest_angle, self.direction);
+                self.direction += diff * pull;
+            }
         }
 
         // Random forward-cone jitter

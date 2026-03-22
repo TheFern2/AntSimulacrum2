@@ -8,8 +8,8 @@
 ## Overview
 
 ```
-Phase 1  Scaffold & Rendering     ░░░░░░░░░░  [ ] not started
-Phase 2  Ants & Pheromones        ░░░░░░░░░░  [ ] not started
+Phase 1  Scaffold & Rendering     ██████████  [x] complete
+Phase 2  Ants & Pheromones        ██████████  [x] complete
 Phase 3  Colony & Lifecycle       ░░░░░░░░░░  [ ] not started
 Phase 4  Living Ecology           ░░░░░░░░░░  [ ] not started
 Phase 5  Player Interaction & UI  ░░░░░░░░░░  [ ] not started
@@ -25,17 +25,17 @@ Phase 6  Persistence & Web        ░░░░░░░░░░  [ ] not starte
 **Goal:** App launches, shows a world with placeholder shapes, camera works.
 
 ### Tasks
-- [ ] `cargo init`, add `macroquad` to `Cargo.toml`
-- [ ] Main game loop with delta time (`get_frame_time()`)
-- [ ] `World` struct: fixed-size grid of cells (`Empty | Wall | Food`)
-- [ ] `Camera` struct: offset + zoom, right-click drag to pan, scroll to zoom, Home key centers nest
-- [ ] Render layers (draw order):
-  - [ ] Background fill (`#1a1208` dark soil)
-  - [ ] Walls (filled grey rects)
-  - [ ] Food sources (green circles, radius = quantity)
-  - [ ] Nest (concentric rings, warm gold)
-  - [ ] Placeholder ants (amber dots, static)
-- [ ] FPS counter (top-left debug overlay)
+- [x] `cargo init`, add `macroquad` to `Cargo.toml`
+- [x] Main game loop with delta time (`get_frame_time()`)
+- [x] `World` struct: fixed-size grid of cells (`Empty | Wall | Food`)
+- [x] `Camera` struct: offset + zoom, right-click drag to pan, scroll to zoom, Home key centers nest
+- [x] Render layers (draw order):
+  - [x] Background fill (`#1a1208` dark soil)
+  - [x] Walls (filled grey rects)
+  - [x] Food sources (green circles, radius = quantity)
+  - [x] Nest (concentric rings, warm gold)
+  - [x] Placeholder ants (amber dots, static)
+- [x] FPS counter (top-left debug overlay)
 
 ### Files
 ```
@@ -57,23 +57,30 @@ App window opens, dark world with gold nest ring, green food circles, grey walls
 This is the **core visual gate** — if this doesn't look cool, nothing else matters.
 
 ### Tasks
-- [ ] `Ant` struct: `position`, `direction`, `speed`, `state: AntState`, `carrying_food: bool`
-- [ ] `AntState` enum: `Foraging | Returning`
-- [ ] Movement: advance along direction each tick, apply forward-cone noise (`±30°` random jitter)
-- [ ] `PheromoneGrid`: two `f32` grids same size as world — `to_home[x][y]` and `to_food[x][y]`
-- [ ] Pheromone deposit: ants deposit on current cell each tick with cooldown
+- [x] `Ant` struct: `position`, `direction`, `speed`, `state: AntState`, `carrying_food: bool`
+- [x] `AntState` enum: `Foraging | Returning`
+- [x] Movement: advance along direction each tick, apply forward-cone noise (`±30°` random jitter)
+- [x] `PheromoneGrid`: two `f32` grids same size as world — `to_home[x][y]` and `to_food[x][y]`
+- [x] Pheromone deposit: ants deposit on current cell each tick with cooldown
   - Foraging ants → deposit `to_home`
   - Returning ants → deposit `to_food`
-- [ ] Pheromone decay: `intensity -= decay_rate * dt` each tick, clamp to 0
-- [ ] Pheromone follow: sample 32 directions in 90° forward cone, pick cell with highest matching channel
-- [ ] Trail degradation: `intensity *= 0.99` on each sampled cell (prevents oversaturation)
-- [ ] Liberty coefficient: per-ant `f32` chance to skip pheromone sampling and wander freely
-- [ ] Wall collision: check target cell before moving, bounce on wall hit (reflect direction)
-- [ ] Food interaction: when Foraging ant reaches food cell → pick up (`carrying_food = true`, switch to `Returning`)
-- [ ] Nest interaction: when Returning ant reaches nest → deposit food, switch to `Foraging`
-- [ ] Pheromone render: draw colored quad per grid cell, `alpha = intensity / max_intensity`
+- [x] Pheromone decay: `intensity -= decay_rate * dt` each tick, clamp to 0
+- [x] Pheromone follow: sample 32 directions in 90° forward cone, pick cell with highest matching channel
+- [x] Trail degradation: `intensity *= 0.999` on chosen best cell only (prevents oversaturation)
+- [x] Liberty coefficient: per-ant `f32` chance to skip pheromone sampling and wander freely
+- [x] Wall collision: check target cell before moving, bounce on wall hit (reflect direction)
+- [x] Food interaction: when Foraging ant reaches food cell → pick up (`carrying_food = true`, switch to `Returning`)
+- [x] Nest interaction: when Returning ant reaches nest → deposit food, switch to `Foraging`
+- [x] Pheromone render: draw colored quad per grid cell, `alpha = intensity / max_intensity`
   - `to_food`: amber `#ff9900` → transparent
   - `to_home`: blue `#0099ff` → transparent
+
+### Implementation notes
+- `to_food` decays 2× faster than `to_home` (biologically accurate — recruitment vs orientation pheromone)
+- Returning ants use a direct nest-homing pull (15–60% weight by distance) alongside pheromone steering to prevent orbital loops around the nest
+- Nest interaction radius = 44px (matches visual outer ring)
+- `gen` is a reserved keyword in Rust 2024 edition — use `r#gen` when calling `rand::Rng::gen`
+- Debug controls added: Shift+R reset, Shift+↑/↓ adjust decay rate live
 
 ### Files
 ```
