@@ -64,11 +64,6 @@ impl Camera {
         (screen - self.offset) / self.zoom
     }
 
-    /// Apply camera transform for drawing: call before draw calls, restore after
-    pub fn apply(&self) {
-        // macroquad doesn't have a push/pop transform, so callers scale manually
-    }
-
     pub fn zoom(&self) -> f32 {
         self.zoom
     }

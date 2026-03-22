@@ -7,21 +7,28 @@ mod colony;
 mod ecology;
 mod input;
 mod pheromone;
+mod predator;
 mod rendering;
 mod ui;
+mod weather;
 mod world;
 
-use ant::{Ant, Caste};
+use ant::{Ant, Caste, SOLDIER_SCAN_RANGE};
 use brood::{advance_brood, BroodMember};
 use camera::Camera;
 use colony::{Colony, GameMode};
 use ecology::Ecology;
 use input::InputState;
 use pheromone::{PheromoneGrid, DEFAULT_DECAY_RATE};
+use predator::{
+    PredatorSystem, SpiderState,
+    SPIDER_KILL_RANGE, COMBAT_RANGE, SOLDIER_DAMAGE_PER_SEC, SPIDER_DAMAGE_PER_SEC,
+};
 use rendering::{draw_debug_overlay, draw_scene};
 use ui::{UiAction, UiState, draw_top_bar, draw_bottom_bar, draw_tool_cursor,
          draw_settings_panel, draw_stats_panel, draw_toasts, draw_collapse_screen,
          is_ui_hovered};
+use weather::Weather;
 use world::World;
 
 const GRID_W: usize = 80;
@@ -106,6 +113,8 @@ fn full_reset(
     brood: &mut Vec<BroodMember>,
     colony: &mut Colony,
     camera: &mut Camera,
+    predators: &mut PredatorSystem,
+    weather: &mut Weather,
     initial_spawned: &mut usize,
     batch_timer: &mut f32,
     milestones: &mut Milestones,
@@ -118,6 +127,8 @@ fn full_reset(
     brood.clear();
     *colony = Colony::new(mode);
     *camera = Camera::new(world.nest_pos);
+    predators.reset();
+    weather.reset();
     *initial_spawned = INITIAL_BATCH_SIZE;
     *batch_timer = INITIAL_BATCH_INTERVAL;
     milestones.reset();
@@ -129,6 +140,7 @@ fn colony_reset(
     brood: &mut Vec<BroodMember>,
     colony: &mut Colony,
     nest_pos: Vec2,
+    predators: &mut PredatorSystem,
     initial_spawned: &mut usize,
     batch_timer: &mut f32,
     milestones: &mut Milestones,
@@ -137,6 +149,7 @@ fn colony_reset(
     *ants = make_ant_batch(nest_pos, INITIAL_BATCH_SIZE);
     brood.clear();
     *colony = Colony::new(colony.mode);
+    predators.reset();
     *initial_spawned = INITIAL_BATCH_SIZE;
     *batch_timer = INITIAL_BATCH_INTERVAL;
     milestones.reset();
@@ -157,6 +170,9 @@ async fn main() {
     let mut initial_spawned = INITIAL_BATCH_SIZE;
     let mut batch_timer     = INITIAL_BATCH_INTERVAL;
 
+    let mut predators  = PredatorSystem::new();
+    let mut weather    = Weather::new();
+
     let mut input      = InputState::new();
     let mut ui_state   = UiState::new();
     let mut milestones = Milestones::new();
@@ -173,6 +189,7 @@ async fn main() {
             let mode = colony.mode;
             full_reset(&mut world, &mut ecology, &mut pheromones, &mut ants,
                        &mut brood, &mut colony, &mut camera,
+                       &mut predators, &mut weather,
                        &mut initial_spawned, &mut batch_timer, &mut milestones, mode);
         }
         if shift && is_key_pressed(KeyCode::M) {
@@ -217,7 +234,13 @@ async fn main() {
         }
 
         // ── Simulate ──────────────────────────────────────────────────────────
-        ecology.update(dt_sim, &mut world);
+
+        // Weather — modifies decay/speed/food
+        let wx = weather.update(dt_sim);
+        if wx.warn_triggered  { ui_state.push_toast("Rain approaching..."); }
+        if wx.storm_ended     { ui_state.push_toast("Rain cleared");        }
+
+        ecology.update(dt_sim, &mut world, weather.food_multiplier());
 
         let new_eggs = colony.update(dt_sim, ants.len(), brood.len());
         for _ in 0..new_eggs { brood.push(BroodMember::new_egg()); }
@@ -225,14 +248,83 @@ async fn main() {
         let hatched = advance_brood(&mut brood, dt_sim, world.nest_pos);
         ants.extend(hatched);
 
-        pheromones.decay(dt_sim, decay_rate);
+        pheromones.decay(dt_sim, decay_rate * weather.decay_multiplier());
 
+        // Predators — move spiders, maybe spawn
+        let ant_positions: Vec<_> = ants.iter().map(|a| a.position).collect();
+        let soldiers = ants.iter().filter(|a| a.caste == Caste::Soldier).count();
+        let spider_spawned = predators.update(dt_sim, &world, &ant_positions, colony.mode, ants.len(), soldiers);
+        if spider_spawned { ui_state.push_toast("Spider spotted!"); }
+
+        // Set soldier attack targets (nearest spider within scan range)
+        for ant in ants.iter_mut() {
+            if ant.caste == Caste::Soldier {
+                let pos = ant.position;
+                ant.soldier_target = predators.spiders.iter()
+                    .filter(|s| !matches!(s.state, SpiderState::Feeding))
+                    .filter(|s| s.position.distance(pos) < SOLDIER_SCAN_RANGE)
+                    .min_by(|a, b| {
+                        a.position.distance(pos)
+                            .partial_cmp(&b.position.distance(pos))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|s| s.position);
+            }
+        }
+
+        let speed_mult = weather.speed_multiplier();
         let old_ants = std::mem::take(&mut ants);
         for mut ant in old_ants {
-            if ant.update(dt_sim, &mut world, &mut pheromones, &mut colony) {
+            if ant.update(dt_sim, &mut world, &mut pheromones, &mut colony, speed_mult) {
                 ants.push(ant);
             }
         }
+
+        // Spider contact kills any ant it touches while Hunting
+        if colony.mode == GameMode::Normal {
+            for spider in predators.spiders.iter_mut() {
+                if spider.state == SpiderState::Hunting {
+                    if let Some(idx) = ants.iter().position(|a| {
+                        a.position.distance(spider.position) < SPIDER_KILL_RANGE
+                    }) {
+                        let was_soldier = ants[idx].caste == Caste::Soldier;
+                        ants.remove(idx);
+                        spider.feed();
+                        if was_soldier { ui_state.push_toast("Soldier fell in battle!"); }
+                    }
+                }
+            }
+        }
+
+        // Soldier–spider combat: mutual damage when in range
+        for spider in predators.spiders.iter_mut() {
+            if matches!(spider.state, SpiderState::Feeding) { continue; }
+            for ant in ants.iter_mut() {
+                if ant.caste == Caste::Soldier
+                    && ant.soldier_target.is_some()
+                    && ant.position.distance(spider.position) < COMBAT_RANGE
+                {
+                    spider.health -= SOLDIER_DAMAGE_PER_SEC * dt_sim;
+                    ant.health    -= SPIDER_DAMAGE_PER_SEC  * dt_sim;
+                }
+            }
+        }
+
+        // Remove soldiers killed in combat
+        let mut soldier_combat_death = false;
+        ants.retain(|a| {
+            if a.caste == Caste::Soldier && a.health <= 0.0 {
+                soldier_combat_death = true;
+                false
+            } else {
+                true
+            }
+        });
+        if soldier_combat_death { ui_state.push_toast("Soldier fell in battle!"); }
+
+        // Remove dead spiders
+        let killed_spiders = predators.remove_dead();
+        if killed_spiders > 0 { ui_state.push_toast("Spider defeated!"); }
 
         // Zen mode: enforce minimum worker floor
         if colony.mode == GameMode::Zen {
@@ -254,6 +346,7 @@ async fn main() {
 
         // ── Render world ───────────────────────────────────────────────────────
         draw_scene(&world, &camera, &pheromones, &ants, &ecology,
+                   &predators.spiders, weather.is_raining(),
                    input.phero_vis, input.show_ant_labels);
 
         // ── HUD ────────────────────────────────────────────────────────────────
@@ -261,10 +354,11 @@ async fn main() {
         let action = draw_top_bar(&colony, &ants, &mut input);
         apply_ui_action(action, &mut world, &mut ecology, &mut pheromones,
                         &mut ants, &mut brood, &mut colony, &mut camera,
+                        &mut predators, &mut weather,
                         &mut initial_spawned, &mut batch_timer, &mut milestones);
 
-        // Bottom bar (tool selector + day info)
-        draw_bottom_bar(&mut input, &ecology);
+        // Bottom bar (tool selector + day info + rain)
+        draw_bottom_bar(&mut input, &ecology, weather.is_raining());
 
         // Tool cursor
         draw_tool_cursor(&input, &camera, &world);
@@ -274,6 +368,7 @@ async fn main() {
             let action = draw_settings_panel(&mut input);
             apply_ui_action(action, &mut world, &mut ecology, &mut pheromones,
                             &mut ants, &mut brood, &mut colony, &mut camera,
+                            &mut predators, &mut weather,
                             &mut initial_spawned, &mut batch_timer, &mut milestones);
         }
 
@@ -290,6 +385,7 @@ async fn main() {
             let action = draw_collapse_screen(&colony);
             apply_ui_action(action, &mut world, &mut ecology, &mut pheromones,
                             &mut ants, &mut brood, &mut colony, &mut camera,
+                            &mut predators, &mut weather,
                             &mut initial_spawned, &mut batch_timer, &mut milestones);
         }
 
@@ -314,6 +410,8 @@ fn apply_ui_action(
     brood:   &mut Vec<BroodMember>,
     colony:  &mut Colony,
     camera:  &mut Camera,
+    predators: &mut PredatorSystem,
+    weather:   &mut Weather,
     initial_spawned: &mut usize,
     batch_timer: &mut f32,
     milestones: &mut Milestones,
@@ -322,12 +420,12 @@ fn apply_ui_action(
         UiAction::None => {}
         UiAction::ResetColony => {
             colony_reset(pheromones, ants, brood, colony, world.nest_pos,
-                         initial_spawned, batch_timer, milestones);
+                         predators, initial_spawned, batch_timer, milestones);
         }
         UiAction::NewWorld => {
             let mode = colony.mode;
             full_reset(world, ecology, pheromones, ants, brood, colony, camera,
-                       initial_spawned, batch_timer, milestones, mode);
+                       predators, weather, initial_spawned, batch_timer, milestones, mode);
         }
         UiAction::SwitchMode(mode) => {
             colony.mode = mode;

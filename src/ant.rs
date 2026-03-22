@@ -13,9 +13,13 @@ const NEST_RADIUS: f32 = 44.0;                                 // matches visual
 
 // Caste movement parameters
 const SCOUT_SPEED_MULT: f32 = 1.3;
-const SOLDIER_PATROL_RADIUS: f32 = 85.0;   // pixels from nest — target orbit distance
-const SOLDIER_PATROL_BAND: f32 = 20.0;     // ± tolerance before correction kicks in
-const NURSE_MAX_RANGE: f32 = 70.0;         // pixels — nurses don't wander further than this
+pub const SOLDIER_PATROL_RADIUS: f32 = 85.0;  // pixels from nest — target orbit distance
+pub const SOLDIER_SCAN_RANGE: f32 = SOLDIER_PATROL_RADIUS + 20.0; // spider detection range
+const SOLDIER_PATROL_BAND: f32 = 20.0;    // ± tolerance before correction kicks in
+const NURSE_MAX_RANGE: f32 = 70.0;        // pixels — nurses don't wander further than this
+
+// Combat
+const SOLDIER_CHARGE_SPEED: f32 = ANT_SPEED * 1.2; // faster when charging a spider
 
 // Ant lifespans (seconds)
 // Equilibrium population ≈ avg_lifespan / egg_interval (7.5s at max food)
@@ -50,16 +54,13 @@ pub struct Ant {
     pub caste: Caste,
     pub age: f32,
     pub max_age: f32,
+    pub health: f32,            // soldiers take combat damage; others effectively immortal
+    pub soldier_target: Option<Vec2>, // set each frame by main loop when spider is nearby
     liberty: f32,       // [0..1] probability of skipping pheromone steering each tick
     deposit_timer: f32,
 }
 
 impl Ant {
-    /// Create a Worker ant (backward-compatible with Phase 2 call sites).
-    pub fn new(pos: Vec2) -> Self {
-        Self::new_with_caste(pos, Caste::Worker)
-    }
-
     pub fn new_with_caste(pos: Vec2, caste: Caste) -> Self {
         use ::rand::Rng;
         let mut rng = ::rand::thread_rng();
@@ -74,6 +75,7 @@ impl Ant {
             Caste::Soldier => AGE_SOLDIER,
             Caste::Nurse   => AGE_NURSE,
         };
+        let health = if caste == Caste::Soldier { 100.0 } else { f32::MAX };
         Self {
             position: pos,
             direction: rng.gen_range(0.0..std::f32::consts::TAU),
@@ -82,18 +84,22 @@ impl Ant {
             caste,
             age: 0.0,
             max_age,
+            health,
+            soldier_target: None,
             liberty,
             deposit_timer: rng.gen_range(0.0..DEPOSIT_INTERVAL),
         }
     }
 
     /// Tick this ant. Returns `false` if the ant has died and should be removed.
+    /// `speed_mult` is applied to ant movement speed (e.g., 0.7 during rain storms).
     pub fn update(
         &mut self,
         dt: f32,
         world: &mut World,
         pheromones: &mut PheromoneGrid,
         colony: &mut Colony,
+        speed_mult: f32,
     ) -> bool {
         // Age — starvation accelerates aging in Normal mode
         let age_mult = if colony.mode == GameMode::Normal && colony.is_starving() {
@@ -109,9 +115,9 @@ impl Ant {
         let mut rng = ::rand::thread_rng();
 
         match self.caste {
-            Caste::Soldier => self.update_guard(dt, world, &mut rng),
-            Caste::Nurse   => self.update_nurse(dt, world, &mut rng),
-            _              => self.update_forager(dt, world, pheromones, colony, &mut rng),
+            Caste::Soldier => self.update_guard(dt, world, &mut rng, speed_mult),
+            Caste::Nurse   => self.update_nurse(dt, world, &mut rng, speed_mult),
+            _              => self.update_forager(dt, world, pheromones, colony, &mut rng, speed_mult),
         }
 
         true
@@ -126,8 +132,10 @@ impl Ant {
         pheromones: &mut PheromoneGrid,
         colony: &mut Colony,
         rng: &mut impl ::rand::Rng,
+        speed_mult: f32,
     ) {
-        let speed = if self.caste == Caste::Scout { ANT_SPEED * SCOUT_SPEED_MULT } else { ANT_SPEED };
+        let base = if self.caste == Caste::Scout { ANT_SPEED * SCOUT_SPEED_MULT } else { ANT_SPEED };
+        let speed = base * speed_mult;
 
         // Deposit pheromone on current cell
         self.deposit_timer -= dt;
@@ -205,38 +213,56 @@ impl Ant {
         }
     }
 
-    // ── Soldier (patrol ring around nest) ───────────────────────────────────
+    // ── Soldier (patrol ring around nest; attack spiders when target set) ────
 
-    fn update_guard(&mut self, dt: f32, world: &mut World, rng: &mut impl ::rand::Rng) {
-        let to_nest = world.nest_pos - self.position;
-        let dist = to_nest.length();
-
-        if dist > SOLDIER_PATROL_RADIUS + SOLDIER_PATROL_BAND {
-            // Too far — pull inward
-            let pull_angle = f32::atan2(to_nest.y, to_nest.x);
-            self.direction += angle_diff(pull_angle, self.direction) * 0.5;
-        } else if dist < SOLDIER_PATROL_RADIUS - SOLDIER_PATROL_BAND && dist > 1.0 {
-            // Too close — push outward
-            let push_angle = f32::atan2(-to_nest.y, -to_nest.x);
-            self.direction += angle_diff(push_angle, self.direction) * 0.3;
+    fn update_guard(
+        &mut self,
+        dt: f32,
+        world: &mut World,
+        rng: &mut impl ::rand::Rng,
+        speed_mult: f32,
+    ) {
+        if let Some(target) = self.soldier_target {
+            // Attack mode — charge toward the spider
+            let to_target = target - self.position;
+            if to_target.length() > 1.0 {
+                let target_dir = to_target.y.atan2(to_target.x);
+                self.direction += angle_diff(target_dir, self.direction) * 0.8;
+            }
+            self.move_simple(dt, world, rng, SOLDIER_CHARGE_SPEED * speed_mult);
+        } else {
+            // Patrol mode — orbit the nest
+            let to_nest = world.nest_pos - self.position;
+            let dist = to_nest.length();
+            if dist > SOLDIER_PATROL_RADIUS + SOLDIER_PATROL_BAND {
+                let pull_angle = to_nest.y.atan2(to_nest.x);
+                self.direction += angle_diff(pull_angle, self.direction) * 0.5;
+            } else if dist < SOLDIER_PATROL_RADIUS - SOLDIER_PATROL_BAND && dist > 1.0 {
+                let push_angle = (-to_nest.y).atan2(-to_nest.x);
+                self.direction += angle_diff(push_angle, self.direction) * 0.3;
+            }
+            self.direction += rng.gen_range(-WANDER_NOISE * 0.5..WANDER_NOISE * 0.5);
+            self.move_simple(dt, world, rng, ANT_SPEED * speed_mult);
         }
-        // Within patrol band: tangential wander keeps them orbiting naturally
-        self.direction += rng.gen_range(-WANDER_NOISE * 0.5..WANDER_NOISE * 0.5);
-
-        self.move_simple(dt, world, rng, ANT_SPEED);
     }
 
     // ── Nurse (stay near nest) ───────────────────────────────────────────────
 
-    fn update_nurse(&mut self, dt: f32, world: &mut World, rng: &mut impl ::rand::Rng) {
+    fn update_nurse(
+        &mut self,
+        dt: f32,
+        world: &mut World,
+        rng: &mut impl ::rand::Rng,
+        speed_mult: f32,
+    ) {
         let dist = self.position.distance(world.nest_pos);
         if dist > NURSE_MAX_RANGE {
             let to_nest = world.nest_pos - self.position;
-            let pull_angle = f32::atan2(to_nest.y, to_nest.x);
+            let pull_angle = to_nest.y.atan2(to_nest.x);
             self.direction += angle_diff(pull_angle, self.direction) * 0.6;
         }
         self.direction += rng.gen_range(-WANDER_NOISE..WANDER_NOISE);
-        self.move_simple(dt, world, rng, ANT_SPEED * 0.7);
+        self.move_simple(dt, world, rng, ANT_SPEED * 0.7 * speed_mult);
     }
 
     // ── Shared movement helper ───────────────────────────────────────────────

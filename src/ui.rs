@@ -151,7 +151,7 @@ pub fn draw_top_bar(colony: &Colony, ants: &[Ant], input: &mut InputState) -> Ui
 
 // ── Bottom bar ──────────────────────────────────────────────────────────────
 
-pub fn draw_bottom_bar(input: &mut InputState, ecology: &Ecology) {
+pub fn draw_bottom_bar(input: &mut InputState, ecology: &Ecology, is_raining: bool) {
     let sw = screen_width();
     let sh = screen_height();
     let by = sh - BOTTOM_BAR_H;
@@ -176,6 +176,12 @@ pub fn draw_bottom_bar(input: &mut InputState, ecology: &Ecology) {
             input.active_tool = *tool;
         }
         x += bw + 6.0;
+    }
+
+    // Rain indicator
+    if is_raining {
+        let rain_color = Color { r: 0.4, g: 0.7, b: 1.0, a: 1.0 };
+        draw_text("~RAIN~", x + 8.0, btn_y + bh * 0.72, 17.0, rain_color);
     }
 
     // Day/night info — right side

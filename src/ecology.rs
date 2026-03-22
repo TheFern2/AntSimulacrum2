@@ -71,8 +71,8 @@ impl FoodSource {
         }
     }
 
-    fn update(&mut self, dt: f32, world: &mut World, day_modifier: f32) {
-        let rate = self.regrowth_rate * day_modifier * dt;
+    fn update(&mut self, dt: f32, world: &mut World, day_modifier: f32, food_mult: f32) {
+        let rate = self.regrowth_rate * day_modifier * food_mult * dt;
         let mut all_at_max = true;
 
         for &(gx, gy) in &self.cells {
@@ -139,7 +139,8 @@ impl Ecology {
     }
 
     /// Advance the ecology simulation by `dt` seconds.
-    pub fn update(&mut self, dt: f32, world: &mut World) {
+    /// `food_mult` is a weather multiplier (1.0 normally, 0.5 during rain).
+    pub fn update(&mut self, dt: f32, world: &mut World, food_mult: f32) {
         // Day/night clock
         self.day_time += dt;
         if self.day_time >= self.day_length {
@@ -151,7 +152,7 @@ impl Ecology {
 
         // Regrow existing sources
         for source in &mut self.sources {
-            source.update(dt, world, modifier);
+            source.update(dt, world, modifier, food_mult);
         }
 
         // Spawn new sources on a random timer (capped at MAX_SOURCES)
