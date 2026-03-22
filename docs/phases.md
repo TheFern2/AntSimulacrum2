@@ -12,8 +12,9 @@ Phase 1  Scaffold & Rendering     ██████████  [x] complete
 Phase 2  Ants & Pheromones        ██████████  [x] complete
 Phase 3  Colony & Lifecycle       ██████████  [x] complete
 Phase 4  Living Ecology           ██████████  [x] complete
-Phase 5  Player Interaction & UI  ░░░░░░░░░░  [ ] not started
-Phase 6  Persistence & Web        ░░░░░░░░░░  [ ] not started
+Phase 5  Player Interaction & UI  ██████████  [x] complete
+Phase 6  Stakes & Threats         ░░░░░░░░░░  [ ] not started
+Phase 7  Persistence & Web        ░░░░░░░░░░  [ ] not started
 ```
 
 **Gate:** Phase 2 is the critical go/no-go. If pheromone trails don't look satisfying → revisit simulation parameters before continuing.
@@ -226,12 +227,82 @@ src/input.rs    mouse/keyboard dispatch, tool application
 src/main.rs     extend: wire input → simulation → render
 ```
 
+### Implementation notes
+- `src/input.rs`: `Tool` (Observe/PlaceFood/DrawWall/DropAnts/Eraser), `SimSpeed` (Paused/Normal/Fast/Max → 0×/1×/2×/8×), `PheromoneVis` moved to `pheromone.rs`
+- `src/ui.rs`: immediate-mode HUD using macroquad draw_* calls; `UiState` owns toast queue; `UiAction` enum returns events to main loop
+- `apply_tool_hold` enables hold-to-paint for Wall and Eraser tools (mouse held down)
+- Tool hotkeys: 1-5; Space = pause/resume; F1 = toggle debug overlay (hides by default)
+- Speed buttons in top bar: || 1x 2x Max; collapse screen pauses sim (dt_sim=0)
+- Stats panel anchors right of nest screen pos, clamps to viewport; toggled by clicking nest in Observe mode
+- Toast milestones: first food, 50/100/500/1000 pop, colony collapsed (3.5s, max 4 stacked)
+- `MilestoneTracker` + `UiState` in main.rs; resets alongside colony/world resets
+- Settings panel: mode switch, pheromone layer toggle, ant labels toggle, Reset Colony / New World
+- `Camera::handle_input` now takes `ui_captured: bool` to suppress pan/zoom over UI
+
 ### Done when
 All 5 tools work and react visibly. HUD updates live. Colony stats panel opens on nest click. Speed controls change simulation pace. Toasts appear for milestones.
 
 ---
 
-## Phase 6 — Persistence & Web
+## Phase 6 — Stakes & Threats
+
+**Goal:** Normal mode has real external pressure. Soldiers fight predators, storms disrupt pheromone highways, and the player must think defensively. No predators in Zen mode.
+
+### Tasks
+
+**Predators (Spiders) — Normal mode only**
+- [ ] `Spider` struct: `position`, `direction`, `speed`, `health`, `state: SpiderState`
+- [ ] `SpiderState` enum: `Wandering | Hunting | Feeding`
+- [ ] Wandering: random walk (slower than ants), wall bounce
+- [ ] Hunting: detect nearest ant within ~60px → chase at 1.5× ant speed
+- [ ] Kill: on contact with ant → ant dies, spider enters Feeding state (~10s pause)
+- [ ] Spawn: at random map edge, timer 180–360s, cap 3 simultaneous spiders
+- [ ] Threat scaling: spawn interval shortens as colony population grows
+- [ ] Spider health: starts at 100, dies at 0 → removed from world
+- [ ] Visual: large dark circle (~4× ant size), charcoal color, red tint when Hunting
+- [ ] Walls block spiders (same collision as ants)
+- [ ] No spiders spawn in Zen mode
+
+**Soldier combat upgrade**
+- [ ] Soldiers scan for spiders within patrol radius + 20px buffer
+- [ ] On detection: `Patrol` → `Attack` state, move directly toward nearest spider
+- [ ] Contact combat: soldier deals damage/tick to spider, spider deals damage/tick to soldier
+- [ ] Multiple soldiers can engage one spider (emergent swarming)
+- [ ] Soldier death in combat → removed like aging death
+- [ ] After spider dies or exits range → soldier returns to `Patrol`
+
+**Rain storms (Normal + Zen)**
+- [ ] `Weather` struct: `storm_active: bool`, `storm_timer: f32`, `cooldown: f32`
+- [ ] Random event: every 4–8 sim-days, lasts 30–60s
+- [ ] Pheromone effect: decay rate 5× during rain → trails wash out
+- [ ] Movement effect: all ant speed reduced 30%
+- [ ] Food effect: regrowth rate halved during storm
+- [ ] Visual: blue-tinted screen overlay, increased background darkness
+- [ ] HUD: rain indicator in bottom bar when storm active
+
+**Threat toasts**
+- [ ] "Spider spotted!" — when a spider spawns
+- [ ] "Soldier fell in battle!" — soldier killed by spider
+- [ ] "Spider defeated!" — soldiers kill a spider
+- [ ] "Rain approaching..." — 10s before storm starts
+- [ ] "Rain cleared" — storm ends
+
+### Files
+```
+src/predator.rs    Spider struct, AI state machine, spawning
+src/weather.rs     Weather/Storm state, rain timer, effects
+src/ant.rs         extend: Soldier Attack state, spider combat
+src/rendering.rs   extend: draw spiders, rain overlay
+src/ui.rs          extend: rain HUD indicator, threat toasts
+src/main.rs        extend: wire predator + weather systems into loop
+```
+
+### Done when
+In Normal mode: spiders spawn from edges within 5 minutes, hunt ants, and soldiers intercept and fight them. Rain storms periodically wash out pheromone trails and slow foraging. Player can build defensive walls to block spider paths. Zen mode has rain (environmental) but no spiders.
+
+---
+
+## Phase 7 — Persistence & Web
 
 **Goal:** Colony survives app restarts. Runs minimized to tray. Builds for web.
 
@@ -281,7 +352,7 @@ index.html            web wrapper
 ```
 AntSimulacrum2/
 ├── Cargo.toml
-├── index.html                  (Phase 6 — web)
+├── index.html                  (Phase 7 — web)
 ├── docs/
 │   ├── gdd.md
 │   ├── gui-design.md
@@ -298,7 +369,9 @@ AntSimulacrum2/
     ├── ecology.rs              FoodSource, day/night         (Phase 4)
     ├── ui.rs                   HUD, panels, toasts           (Phase 5)
     ├── input.rs                mouse/keyboard, tools         (Phase 5)
-    └── persistence.rs          save/load, serde              (Phase 6)
+    ├── predator.rs              Spider AI, spawning            (Phase 6)
+    ├── weather.rs               Rain storms, effects           (Phase 6)
+    └── persistence.rs           save/load, serde               (Phase 7)
 ```
 
 ---

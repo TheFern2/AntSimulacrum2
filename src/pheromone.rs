@@ -1,6 +1,14 @@
 pub const MAX_INTENSITY: f32 = 10.0;
 pub const DEFAULT_DECAY_RATE: f32 = 0.087;
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PheromoneVis {
+    Both,
+    ToFood,
+    ToHome,
+    Off,
+}
+
 pub struct PheromoneGrid {
     pub width: usize,
     pub height: usize,

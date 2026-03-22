@@ -185,6 +185,14 @@ impl Ecology {
         self.night_amount() < 0.5
     }
 
+    /// Place a food source at the given grid cell (ignores the source cap).
+    pub fn add_source_at_grid(&mut self, gx: usize, gy: usize, world: &mut World) {
+        let source = FoodSource::new(gx, gy, world);
+        if !source.cells.is_empty() {
+            self.sources.push(source);
+        }
+    }
+
     fn try_spawn(&mut self, world: &mut World) {
         use ::rand::Rng;
         let mut rng = ::rand::thread_rng();

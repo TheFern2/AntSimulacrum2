@@ -20,7 +20,8 @@ impl Camera {
         }
     }
 
-    pub fn handle_input(&mut self, world_center: Vec2) {
+    pub fn handle_input(&mut self, world_center: Vec2, ui_captured: bool) {
+        if ui_captured { return; }
         // Scroll to zoom (centered on mouse)
         let scroll = mouse_wheel().1;
         if scroll != 0.0 {

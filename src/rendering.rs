@@ -5,7 +5,7 @@ use crate::brood::{BroodMember, BroodStage};
 use crate::camera::Camera;
 use crate::colony::Colony;
 use crate::ecology::Ecology;
-use crate::pheromone::{PheromoneGrid, MAX_INTENSITY};
+use crate::pheromone::{PheromoneGrid, PheromoneVis, MAX_INTENSITY};
 use crate::world::{Cell, World};
 
 const COLOR_BG_DAY: Color   = Color { r: 0.102, g: 0.071, b: 0.031, a: 1.0 }; // #1a1208
@@ -28,6 +28,8 @@ pub fn draw_scene(
     pheromones: &PheromoneGrid,
     ants: &[Ant],
     ecology: &Ecology,
+    phero_vis: PheromoneVis,
+    show_ant_labels: bool,
 ) {
     // Background lerps from day soil (#1a1208) to night dark (#0a0a0a)
     let n = ecology.night_amount();
@@ -38,16 +40,18 @@ pub fn draw_scene(
         a: 1.0,
     };
     clear_background(bg);
-    draw_pheromones(world, camera, pheromones);
+    if phero_vis != PheromoneVis::Off {
+        draw_pheromones(world, camera, pheromones, phero_vis);
+    }
     draw_world_cells(world, camera);
-    draw_ants(camera, ants);
+    draw_ants(camera, ants, show_ant_labels);
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn draw_pheromones(world: &World, camera: &Camera, pheromones: &PheromoneGrid) {
+fn draw_pheromones(world: &World, camera: &Camera, pheromones: &PheromoneGrid, vis: PheromoneVis) {
     let cs = world.cell_size * camera.zoom();
 
     for y in 0..world.height {
@@ -61,11 +65,11 @@ fn draw_pheromones(world: &World, camera: &Camera, pheromones: &PheromoneGrid) {
                 y as f32 * world.cell_size,
             ));
 
-            if food > 0.01 {
+            if food > 0.01 && matches!(vis, PheromoneVis::Both | PheromoneVis::ToFood) {
                 let alpha = (food / MAX_INTENSITY).min(1.0) * 0.75;
                 draw_rectangle(sp.x, sp.y, cs, cs, Color { r: 1.0, g: 0.6, b: 0.0, a: alpha });
             }
-            if home > 0.01 {
+            if home > 0.01 && matches!(vis, PheromoneVis::Both | PheromoneVis::ToHome) {
                 let alpha = (home / MAX_INTENSITY).min(1.0) * 0.75;
                 draw_rectangle(sp.x, sp.y, cs, cs, Color { r: 0.0, g: 0.6, b: 1.0, a: alpha });
             }
@@ -108,7 +112,7 @@ fn draw_world_cells(world: &World, camera: &Camera) {
     draw_circle(nest_s.x, nest_s.y, base_r, COLOR_NEST_INNER);
 }
 
-fn draw_ants(camera: &Camera, ants: &[Ant]) {
+fn draw_ants(camera: &Camera, ants: &[Ant], show_labels: bool) {
     let ant_r = 2.5 * camera.zoom();
     let tick_len = 5.0 * camera.zoom();
 
@@ -135,6 +139,15 @@ fn draw_ants(camera: &Camera, ants: &[Ant]) {
         // Ring highlight for returning ants
         if ant.state == AntState::Returning {
             draw_circle_lines(sp.x, sp.y, ant_r + 1.0, 0.5, COLOR_ANT_CARRYING);
+        }
+
+        // Optional caste label
+        if show_labels {
+            let label = match ant.caste {
+                Caste::Worker  => "W", Caste::Scout  => "Sc",
+                Caste::Soldier => "So", Caste::Nurse => "N",
+            };
+            draw_text(label, sp.x + ant_r + 1.0, sp.y - ant_r, 10.0, color);
         }
     }
 }
@@ -178,11 +191,5 @@ pub fn draw_debug_overlay(
             ecology.sources.len()),
         8.0, y, 16.0, GRAY,
     ); y += 20.0;
-    draw_text("Shift+R: reset  |  Shift+M: toggle mode", 8.0, y, 16.0, GRAY);
-
-    if colony.collapsed {
-        let cw = screen_width();
-        let ch = screen_height();
-        draw_text("COLONY COLLAPSED", cw / 2.0 - 120.0, ch / 2.0, 40.0, RED);
-    }
+    draw_text("Shift+R: reset  |  Shift+M: toggle mode  |  F1: hide debug", 8.0, y, 16.0, GRAY);
 }
