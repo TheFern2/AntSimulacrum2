@@ -2,7 +2,6 @@
 
 use macroquad::prelude::*;
 
-use crate::ant::{Ant, Caste};
 use crate::camera::Camera;
 use crate::ecology::Ecology;
 use crate::pheromone::PheromoneVis;
@@ -34,6 +33,14 @@ pub enum SimSpeed {
     Max,
 }
 
+// ── ToolResult — returned by apply_tool_click ────────────────────────────────
+
+pub enum ToolResult {
+    None,
+    /// Drop ants near this world position (caller spawns them into the correct colony).
+    DropAnts(Vec2),
+}
+
 // ── Input state ─────────────────────────────────────────────────────────────
 
 pub struct InputState {
@@ -44,6 +51,7 @@ pub struct InputState {
     pub settings_open:   bool,
     pub stats_open:      bool,
     pub show_debug:      bool,
+    pub selected_colony: usize,
 }
 
 impl InputState {
@@ -56,6 +64,7 @@ impl InputState {
             settings_open:    false,
             stats_open:       false,
             show_debug:       false,
+            selected_colony:  0,
         }
     }
 
@@ -97,16 +106,16 @@ impl InputState {
     }
 
     /// Apply the active tool on a left-click at `screen_pos`.
-    /// Returns true if any world action was taken.
+    /// `nest_positions` — world positions of all colony nests (for Observe proximity check).
     pub fn apply_tool_click(
         &mut self,
         screen_pos: Vec2,
         camera: &Camera,
         world: &mut World,
-        ants: &mut Vec<Ant>,
+        nest_positions: &[Vec2],
         ecology: &mut Ecology,
-    ) -> bool {
-        if Self::is_over_ui(screen_pos.y) { return false; }
+    ) -> ToolResult {
+        if Self::is_over_ui(screen_pos.y) { return ToolResult::None; }
 
         let world_pos = camera.screen_to_world(screen_pos);
         let gx = (world_pos.x / world.cell_size) as i32;
@@ -117,21 +126,27 @@ impl InputState {
 
         match self.active_tool {
             Tool::Observe => {
-                // Toggle stats panel when clicking near the nest
-                let nest_screen = camera.world_to_screen(world.nest_pos);
-                if screen_pos.distance(nest_screen) < 44.0 * camera.zoom() {
-                    self.stats_open = !self.stats_open;
-                    return true;
+                // Toggle stats panel when clicking near any colony nest
+                for (i, &nest) in nest_positions.iter().enumerate() {
+                    let nest_screen = camera.world_to_screen(nest);
+                    if screen_pos.distance(nest_screen) < 44.0 * camera.zoom() {
+                        if self.selected_colony == i && self.stats_open {
+                            self.stats_open = false;
+                        } else {
+                            self.selected_colony = i;
+                            self.stats_open = true;
+                        }
+                        return ToolResult::None;
+                    }
                 }
-                false
+                ToolResult::None
             }
 
             Tool::PlaceFood => {
                 if in_bounds {
                     ecology.add_source_at_grid(gx as usize, gy as usize, world);
-                    return true;
                 }
-                false
+                ToolResult::None
             }
 
             Tool::DrawWall => {
@@ -139,22 +154,12 @@ impl InputState {
                     let idx = gy as usize * world.width + gx as usize;
                     world.cells[idx] = Cell::Wall;
                     world.food_quantities[idx] = 0.0;
-                    return true;
                 }
-                false
+                ToolResult::None
             }
 
             Tool::DropAnts => {
-                use ::rand::Rng;
-                let mut rng = ::rand::thread_rng();
-                for _ in 0..DROP_ANTS_COUNT {
-                    let offset = Vec2::new(
-                        rng.gen_range(-6.0..6.0),
-                        rng.gen_range(-6.0..6.0),
-                    );
-                    ants.push(Ant::new_with_caste(world_pos + offset, Caste::Worker));
-                }
-                true
+                ToolResult::DropAnts(world_pos)
             }
 
             Tool::Eraser => {
@@ -162,9 +167,8 @@ impl InputState {
                     let idx = gy as usize * world.width + gx as usize;
                     world.cells[idx] = Cell::Empty;
                     world.food_quantities[idx] = 0.0;
-                    return true;
                 }
-                false
+                ToolResult::None
             }
         }
     }
@@ -197,5 +201,18 @@ impl InputState {
                 _ => {}
             }
         }
+    }
+
+    /// Drop `DROP_ANTS_COUNT` workers scattered around `world_pos`.
+    /// Returns positions to spawn (caller assigns colony).
+    pub fn drop_ant_positions(world_pos: Vec2) -> Vec<Vec2> {
+        use ::rand::Rng;
+        let mut rng = ::rand::thread_rng();
+        (0..DROP_ANTS_COUNT)
+            .map(|_| {
+                let offset = Vec2::new(rng.gen_range(-6.0..6.0), rng.gen_range(-6.0..6.0));
+                world_pos + offset
+            })
+            .collect()
     }
 }

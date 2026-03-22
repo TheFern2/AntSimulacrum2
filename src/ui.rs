@@ -97,42 +97,48 @@ fn button(x: f32, y: f32, w: f32, h: f32, label: &str, active: bool) -> bool {
 
 // ── Top bar ─────────────────────────────────────────────────────────────────
 
-pub fn draw_top_bar(colony: &Colony, ants: &[Ant], input: &mut InputState) -> UiAction {
+/// `colony_data` — slice of (colony, ants) for each colony in order.
+pub fn draw_top_bar(
+    colony_data: &[(&Colony, &[Ant])],
+    input: &mut InputState,
+) -> UiAction {
     let sw = screen_width();
     draw_rectangle(0.0, 0.0, sw, TOP_BAR_H, BAR_BG);
     draw_line(0.0, TOP_BAR_H, sw, TOP_BAR_H, 1.0, Color { r: 0.4, g: 0.3, b: 0.1, a: 0.5 });
 
     let ty  = TOP_BAR_H * 0.68;
-    let fs  = 18.0;
-    let mut x = 10.0;
+    let fs  = 16.0;
+    let mut x = 8.0;
 
-    // Colony stats
-    draw_text(&format!("Ants: {}", ants.len()),          x, ty, fs, WHITE); x += 110.0;
-    draw_text(&format!("Food: {:.0}", colony.food_stored), x, ty, fs, WHITE); x += 105.0;
+    // Per-colony compact stats
+    for (colony, ants) in colony_data {
+        // Colored colony dot
+        draw_circle(x + 5.0, ty - 5.0, 5.0, colony.color);
+        x += 14.0;
 
-    // Queen
-    let (q_label, q_color) = match colony.queen.status_label() {
-        "OK"       => ("OK",       COLOR_OK),
-        "LOW"      => ("LOW",      COLOR_LOW),
-        "CRITICAL" => ("CRITICAL", COLOR_CRITICAL),
-        _          => ("DEAD",     COLOR_DEAD),
-    };
-    draw_text("Queen: ", x, ty, fs, WHITE);
-    let qx = x + measure_text("Queen: ", None, fs as u16, 1.0).width;
-    draw_text(q_label, qx, ty, fs, q_color);
-    x += 165.0;
+        let (q_label, q_color) = match colony.queen.status_label() {
+            "OK"       => ("Q:OK",   COLOR_OK),
+            "LOW"      => ("Q:LOW",  COLOR_LOW),
+            "CRITICAL" => ("Q:CRIT", COLOR_CRITICAL),
+            _          => ("Q:DEAD", COLOR_DEAD),
+        };
 
-    // Mode badge
-    let (mode_label, mode_color) = match colony.mode {
-        GameMode::Zen    => ("[ZEN]",    Color { r: 0.30, g: 0.80, b: 0.40, a: 1.0 }),
-        GameMode::Normal => ("[NORMAL]", Color { r: 0.90, g: 0.60, b: 0.20, a: 1.0 }),
-    };
-    draw_text(mode_label, x, ty, fs, mode_color);
+        let line = format!("{} ants  F:{:.0}  {}  |  ",
+            ants.len(), colony.food_stored, q_label);
+        let line_no_status = format!("{} ants  F:{:.0}  ", ants.len(), colony.food_stored);
+
+        draw_text(&line_no_status, x, ty, fs, WHITE);
+        let status_x = x + measure_text(&line_no_status, None, fs as u16, 1.0).width;
+        draw_text(q_label, status_x, ty, fs, q_color);
+        let sep_x = status_x + measure_text(q_label, None, fs as u16, 1.0).width;
+        draw_text("  |  ", sep_x, ty, fs, DIM);
+
+        x += measure_text(&line, None, fs as u16, 1.0).width;
+    }
 
     // Speed buttons (right side)
     let bw = 44.0; let bh = 26.0;
     let by = (TOP_BAR_H - bh) / 2.0;
-    // 5 buttons × 44 + 4 inner gaps × 4 + 1 wide gap × 8 + 12px right margin = 260
     let mut bx = sw - 260.0;
 
     if button(bx, by, bw, bh, "||",  input.sim_speed == SimSpeed::Paused) { input.sim_speed = SimSpeed::Paused; } bx += bw + 4.0;
@@ -312,7 +318,7 @@ pub fn draw_settings_panel(input: &mut InputState) -> UiAction {
         Color { r: 0.4, g: 0.3, b: 0.1, a: 0.4 });
     ry += 12.0;
     let big_bw = (pw - 36.0) / 2.0;
-    if button(px + 12.0,                  ry, big_bw, bh + 4.0, "Reset Colony", false) {
+    if button(px + 12.0,                  ry, big_bw, bh + 4.0, "Reset Colonies", false) {
         input.settings_open = false;
         action = UiAction::ResetColony;
     }
@@ -332,11 +338,11 @@ pub fn draw_stats_panel(
     brood:  &[BroodMember],
     ecology: &Ecology,
     camera: &Camera,
-    world:  &World,
+    nest_pos: Vec2,
 ) {
     // Anchor panel to the right of the nest
-    let nest_screen = camera.world_to_screen(world.nest_pos);
-    let pw = 290.0; let ph = 380.0;
+    let nest_screen = camera.world_to_screen(nest_pos);
+    let pw = 290.0; let ph = 390.0;
     let sw = screen_width(); let sh = screen_height();
 
     let mut px = nest_screen.x + 60.0;
@@ -349,12 +355,15 @@ pub fn draw_stats_panel(
     draw_rectangle(px, py, pw, ph, PANEL_BG);
     draw_rectangle_lines(px, py, pw, ph, 1.5, PANEL_BORDER);
 
+    // Colony color swatch in header
+    draw_circle(px + 18.0, py + 16.0, 7.0, colony.color);
+
     // Header
     let mins = (ecology.day_time / 60.0) as u32;
     let secs = (ecology.day_time as u32) % 60;
     draw_text(
-        &format!("Colony — Day {}, {:02}:{:02}", ecology.day_count + 1, mins, secs),
-        px + 10.0, py + 22.0, 18.0, GOLD,
+        &format!("Colony {} — Day {}, {:02}:{:02}", colony.id + 1, ecology.day_count + 1, mins, secs),
+        px + 30.0, py + 22.0, 18.0, GOLD,
     );
     draw_line(px, py + 28.0, px + pw, py + 28.0, 1.0,
         Color { r: 0.4, g: 0.3, b: 0.1, a: 0.4 });
@@ -370,7 +379,6 @@ pub fn draw_stats_panel(
     let soldiers = ants.iter().filter(|a| a.caste == Caste::Soldier).count();
     let nurses   = ants.iter().filter(|a| a.caste == Caste::Nurse).count();
     let total    = ants.len();
-
     let pct = |n: usize| if total > 0 { n * 100 / total } else { 0 };
 
     let rows: &[(&str, String)] = &[
@@ -432,50 +440,6 @@ pub fn draw_toasts(ui_state: &UiState) {
             Color { r: 1.0, g: 0.9, b: 0.7, a: alpha },
         );
     }
-}
-
-// ── Colony collapse screen ──────────────────────────────────────────────────
-
-pub fn draw_collapse_screen(colony: &Colony) -> UiAction {
-    if !colony.collapsed { return UiAction::None; }
-
-    let sw = screen_width(); let sh = screen_height();
-    draw_rectangle(0.0, 0.0, sw, sh, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.78 });
-
-    let pw = 500.0; let ph = 290.0;
-    let px = (sw - pw) / 2.0; let py = (sh - ph) / 2.0;
-    draw_rectangle(px, py, pw, ph, PANEL_BG);
-    draw_rectangle_lines(px, py, pw, ph, 2.0, Color { r: 0.5, g: 0.2, b: 0.1, a: 0.8 });
-
-    // Title
-    let title = "Colony Collapsed";
-    let td = measure_text(title, None, 30, 1.0);
-    draw_text(title, px + (pw - td.width) / 2.0, py + 48.0, 30.0,
-        Color { r: 1.0, g: 0.3, b: 0.2, a: 1.0 });
-    draw_line(px + 20.0, py + 58.0, px + pw - 20.0, py + 58.0, 1.0,
-        Color { r: 0.5, g: 0.2, b: 0.1, a: 0.5 });
-
-    let mut ry = py + 84.0;
-    let age = colony.colony_age as u32;
-    let lines = [
-        format!("The colony survived  {}d {}h {}m",
-            age / 86400, (age / 3600) % 24, (age / 60) % 60),
-        format!("Peak population:    {}", colony.peak_population),
-        format!("Total food gathered: {}", colony.total_food_delivered),
-    ];
-    for line in &lines {
-        let td = measure_text(line, None, 18, 1.0);
-        draw_text(line, px + (pw - td.width) / 2.0, ry, 18.0, WHITE);
-        ry += 28.0;
-    }
-    ry += 20.0;
-
-    let mut action = UiAction::None;
-    let bw = 160.0; let bh = 36.0; let cx = px + pw / 2.0;
-    if button(cx - bw - 10.0, ry, bw, bh, "Start New Colony", false) { action = UiAction::NewWorld; }
-    if button(cx + 10.0,       ry, bw, bh, "Switch to Zen",    false) { action = UiAction::SwitchMode(GameMode::Zen); }
-
-    action
 }
 
 // ── is_ui_hovered ───────────────────────────────────────────────────────────

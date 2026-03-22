@@ -14,16 +14,20 @@ const NEST_RADIUS: f32 = 44.0;                                 // matches visual
 // Caste movement parameters
 const SCOUT_SPEED_MULT: f32 = 1.3;
 pub const SOLDIER_PATROL_RADIUS: f32 = 85.0;  // pixels from nest — target orbit distance
-pub const SOLDIER_SCAN_RANGE: f32 = SOLDIER_PATROL_RADIUS + 20.0; // spider detection range
+pub const SOLDIER_SCAN_RANGE: f32 = SOLDIER_PATROL_RADIUS + 20.0;
 const SOLDIER_PATROL_BAND: f32 = 20.0;    // ± tolerance before correction kicks in
 const NURSE_MAX_RANGE: f32 = 70.0;        // pixels — nurses don't wander further than this
 
 // Combat
-const SOLDIER_CHARGE_SPEED: f32 = ANT_SPEED * 1.2; // faster when charging a spider
+const SOLDIER_CHARGE_SPEED: f32 = ANT_SPEED * 1.2; // faster when charging a target
+
+// Ant base health by caste
+const HEALTH_WORKER: f32 = 50.0;
+const HEALTH_SCOUT: f32 = 40.0;
+const HEALTH_SOLDIER: f32 = 100.0;
+const HEALTH_NURSE: f32 = 30.0;
 
 // Ant lifespans (seconds)
-// Equilibrium population ≈ avg_lifespan / egg_interval (7.5s at max food)
-// These values target ~100 ants at steady state with full food supply.
 const AGE_WORKER: f32 = 720.0;
 const AGE_SCOUT: f32 = 480.0;
 const AGE_SOLDIER: f32 = 960.0;
@@ -46,22 +50,24 @@ pub enum AntState {
     Returning,
 }
 
+#[allow(dead_code)] // colony_id is read by external systems; suppress field-level lint
 pub struct Ant {
     pub position: Vec2,
     pub direction: f32, // radians
     pub state: AntState,
     pub carrying_food: bool,
     pub caste: Caste,
+    pub colony_id: usize,  // which colony this ant belongs to
     pub age: f32,
     pub max_age: f32,
-    pub health: f32,            // soldiers take combat damage; others effectively immortal
-    pub soldier_target: Option<Vec2>, // set each frame by main loop when spider is nearby
+    pub health: f32,
+    pub attack_target: Option<Vec2>, // set each frame: spider or enemy ant position
     liberty: f32,       // [0..1] probability of skipping pheromone steering each tick
     deposit_timer: f32,
 }
 
 impl Ant {
-    pub fn new_with_caste(pos: Vec2, caste: Caste) -> Self {
+    pub fn new_with_caste(pos: Vec2, caste: Caste, colony_id: usize) -> Self {
         use ::rand::Rng;
         let mut rng = ::rand::thread_rng();
         let liberty = match caste {
@@ -75,32 +81,43 @@ impl Ant {
             Caste::Soldier => AGE_SOLDIER,
             Caste::Nurse   => AGE_NURSE,
         };
-        let health = if caste == Caste::Soldier { 100.0 } else { f32::MAX };
+        let health = match caste {
+            Caste::Worker  => HEALTH_WORKER,
+            Caste::Scout   => HEALTH_SCOUT,
+            Caste::Soldier => HEALTH_SOLDIER,
+            Caste::Nurse   => HEALTH_NURSE,
+        };
         Self {
             position: pos,
             direction: rng.gen_range(0.0..std::f32::consts::TAU),
             state: AntState::Foraging,
             carrying_food: false,
             caste,
+            colony_id,
             age: 0.0,
             max_age,
             health,
-            soldier_target: None,
+            attack_target: None,
             liberty,
             deposit_timer: rng.gen_range(0.0..DEPOSIT_INTERVAL),
         }
     }
 
     /// Tick this ant. Returns `false` if the ant has died and should be removed.
-    /// `speed_mult` is applied to ant movement speed (e.g., 0.7 during rain storms).
+    /// `nest_pos` is the colony's nest position (passed explicitly to avoid borrow conflicts).
+    /// `speed_mult` is applied to movement speed (e.g., 0.7 during rain storms).
     pub fn update(
         &mut self,
         dt: f32,
         world: &mut World,
         pheromones: &mut PheromoneGrid,
         colony: &mut Colony,
+        nest_pos: Vec2,
         speed_mult: f32,
     ) -> bool {
+        // Combat damage check
+        if self.health <= 0.0 { return false; }
+
         // Age — starvation accelerates aging in Normal mode
         let age_mult = if colony.mode == GameMode::Normal && colony.is_starving() {
             STARVATION_AGE_MULT
@@ -115,9 +132,9 @@ impl Ant {
         let mut rng = ::rand::thread_rng();
 
         match self.caste {
-            Caste::Soldier => self.update_guard(dt, world, &mut rng, speed_mult),
-            Caste::Nurse   => self.update_nurse(dt, world, &mut rng, speed_mult),
-            _              => self.update_forager(dt, world, pheromones, colony, &mut rng, speed_mult),
+            Caste::Soldier => self.update_guard(dt, world, &mut rng, nest_pos, speed_mult),
+            Caste::Nurse   => self.update_nurse(dt, world, &mut rng, nest_pos, speed_mult),
+            _              => self.update_forager(dt, world, pheromones, colony, &mut rng, nest_pos, speed_mult),
         }
 
         true
@@ -132,6 +149,7 @@ impl Ant {
         pheromones: &mut PheromoneGrid,
         colony: &mut Colony,
         rng: &mut impl ::rand::Rng,
+        nest_pos: Vec2,
         speed_mult: f32,
     ) {
         let base = if self.caste == Caste::Scout { ANT_SPEED * SCOUT_SPEED_MULT } else { ANT_SPEED };
@@ -150,7 +168,6 @@ impl Ant {
         }
 
         // Pheromone steering (unless liberty roll fires)
-        // Returns trail strength [0..1] so we can suppress noise on highways
         let trail_strength = if rng.r#gen::<f32>() >= self.liberty {
             let wide_cone = self.caste == Caste::Scout;
             self.steer_by_pheromone(pheromones, world, wide_cone)
@@ -158,9 +175,9 @@ impl Ant {
             0.0
         };
 
-        // Returning ants: direct nest-homing pull (prevents pheromone-ring orbiting)
+        // Returning ants: direct nest-homing pull
         if self.state == AntState::Returning {
-            let to_nest = world.nest_pos - self.position;
+            let to_nest = nest_pos - self.position;
             let dist = to_nest.length();
             if dist > 1.0 {
                 let nest_angle = f32::atan2(to_nest.y, to_nest.x);
@@ -170,9 +187,7 @@ impl Ant {
             }
         }
 
-        // Wander noise — suppressed when on a strong trail so ants stick to highways
-        // Strong trail (strength→1.0): noise reduced to ~15% of base
-        // No trail (strength=0.0):     full noise for exploration
+        // Wander noise — suppressed when on a strong trail
         let noise_scale = 1.0 - trail_strength * 0.85;
         self.direction += rng.gen_range(-WANDER_NOISE..WANDER_NOISE) * noise_scale;
 
@@ -202,7 +217,7 @@ impl Ant {
 
         // Nest interaction: deposit food, flip to Foraging
         if self.state == AntState::Returning
-            && self.position.distance(world.nest_pos) < NEST_RADIUS
+            && self.position.distance(nest_pos) < NEST_RADIUS
         {
             if self.carrying_food {
                 colony.deposit_food();
@@ -213,17 +228,18 @@ impl Ant {
         }
     }
 
-    // ── Soldier (patrol ring around nest; attack spiders when target set) ────
+    // ── Soldier (patrol ring around nest; attack targets when set) ────
 
     fn update_guard(
         &mut self,
         dt: f32,
         world: &mut World,
         rng: &mut impl ::rand::Rng,
+        nest_pos: Vec2,
         speed_mult: f32,
     ) {
-        if let Some(target) = self.soldier_target {
-            // Attack mode — charge toward the spider
+        if let Some(target) = self.attack_target {
+            // Attack mode — charge toward the target (spider or enemy ant)
             let to_target = target - self.position;
             if to_target.length() > 1.0 {
                 let target_dir = to_target.y.atan2(to_target.x);
@@ -232,7 +248,7 @@ impl Ant {
             self.move_simple(dt, world, rng, SOLDIER_CHARGE_SPEED * speed_mult);
         } else {
             // Patrol mode — orbit the nest
-            let to_nest = world.nest_pos - self.position;
+            let to_nest = nest_pos - self.position;
             let dist = to_nest.length();
             if dist > SOLDIER_PATROL_RADIUS + SOLDIER_PATROL_BAND {
                 let pull_angle = to_nest.y.atan2(to_nest.x);
@@ -253,11 +269,12 @@ impl Ant {
         dt: f32,
         world: &mut World,
         rng: &mut impl ::rand::Rng,
+        nest_pos: Vec2,
         speed_mult: f32,
     ) {
-        let dist = self.position.distance(world.nest_pos);
+        let dist = self.position.distance(nest_pos);
         if dist > NURSE_MAX_RANGE {
-            let to_nest = world.nest_pos - self.position;
+            let to_nest = nest_pos - self.position;
             let pull_angle = to_nest.y.atan2(to_nest.x);
             self.direction += angle_diff(pull_angle, self.direction) * 0.6;
         }
@@ -328,7 +345,7 @@ impl Ant {
 
         if best_val > 0.01 {
             let diff = angle_diff(best_dir, self.direction);
-            self.direction += diff * 0.65; // was 0.4 — stronger correction toward trail
+            self.direction += diff * 0.65;
 
             // Degrade the chosen cell to prevent trail oversaturation
             match self.state {

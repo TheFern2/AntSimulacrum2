@@ -1,10 +1,12 @@
 // Colony state, Queen, food economy, and game mode.
 
-const BASE_EGG_INTERVAL: f32 = 15.0;        // seconds between eggs at base rate
-const FOOD_PER_ANT_SEC: f32 = 0.002;        // food consumed per ant per second
-const QUEEN_HEALTH_DECAY_SEC: f32 = 0.00006; // queen health lost per second when starving
-const EGG_FOOD_THRESHOLD: f32 = 3.0;        // min food_stored to allow egg laying
-const ZEN_MIN_WORKERS: usize = 10;          // Zen mode: never below this many workers
+use macroquad::prelude::{Color, Vec2};
+
+const BASE_EGG_INTERVAL: f32 = 15.0;
+const FOOD_PER_ANT_SEC: f32 = 0.002;
+const QUEEN_HEALTH_DECAY_SEC: f32 = 0.00006;
+const EGG_FOOD_THRESHOLD: f32 = 3.0;
+const ZEN_MIN_WORKERS: usize = 10;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GameMode {
@@ -13,8 +15,8 @@ pub enum GameMode {
 }
 
 pub struct Queen {
-    pub health: f32,    // 0.0 (dead) → 1.0 (healthy)
-    pub egg_timer: f32, // accumulates; egg laid when >= egg_interval
+    pub health: f32,
+    pub egg_timer: f32,
     pub alive: bool,
 }
 
@@ -24,26 +26,32 @@ impl Queen {
     }
 
     pub fn status_label(&self) -> &'static str {
-        if !self.alive        { "DEAD"     }
+        if !self.alive             { "DEAD"     }
         else if self.health < 0.25 { "CRITICAL" }
         else if self.health < 0.60 { "LOW"      }
-        else                  { "OK"       }
+        else                       { "OK"       }
     }
 }
 
 pub struct Colony {
+    pub id:    usize,
+    pub nest_pos: Vec2,
+    pub color: Color,
     pub queen: Queen,
     pub food_stored: f32,
     pub mode: GameMode,
-    pub colony_age: f32,         // total seconds elapsed
+    pub colony_age: f32,
     pub peak_population: u32,
     pub total_food_delivered: u32,
     pub collapsed: bool,
 }
 
 impl Colony {
-    pub fn new(mode: GameMode) -> Self {
+    pub fn new(id: usize, nest_pos: Vec2, color: Color, mode: GameMode) -> Self {
         Self {
+            id,
+            nest_pos,
+            color,
             queen: Queen::new(),
             food_stored: 0.0,
             mode,
@@ -63,13 +71,11 @@ impl Colony {
             self.peak_population = pop;
         }
 
-        // Food consumption: ants eat from stored reserves
         let consumed = FOOD_PER_ANT_SEC * ant_count as f32 * dt;
         self.food_stored = (self.food_stored - consumed).max(0.0);
 
         let starving = self.food_stored < EGG_FOOD_THRESHOLD;
 
-        // Normal mode: starvation drains queen health
         if self.mode == GameMode::Normal && starving && self.queen.alive {
             self.queen.health = (self.queen.health - QUEEN_HEALTH_DECAY_SEC * dt).max(0.0);
             if self.queen.health <= 0.0 {
@@ -77,20 +83,13 @@ impl Colony {
             }
         }
 
-        // Zen mode: queen is immortal
         if self.mode == GameMode::Zen {
             self.queen.alive = true;
-            if self.queen.health < 1.0 {
-                self.queen.health = 1.0;
-            }
+            if self.queen.health < 1.0 { self.queen.health = 1.0; }
         }
 
-        // No eggs if queen dead or starving
-        if !self.queen.alive || starving {
-            return 0;
-        }
+        if !self.queen.alive || starving { return 0; }
 
-        // Egg rate scales with food stored (0.5x scarce → 2.0x abundant)
         let food_factor = (self.food_stored / 15.0).clamp(0.5, 2.0);
         let egg_interval = BASE_EGG_INTERVAL / food_factor;
 

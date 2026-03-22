@@ -25,7 +25,7 @@ impl BroodMember {
 }
 
 /// Advance all brood timers by `dt`. Returns newly hatched ants.
-pub fn advance_brood(brood: &mut Vec<BroodMember>, dt: f32, nest_pos: Vec2) -> Vec<Ant> {
+pub fn advance_brood(brood: &mut Vec<BroodMember>, dt: f32, nest_pos: Vec2, colony_id: usize) -> Vec<Ant> {
     let mut new_ants = Vec::new();
     let mut i = 0;
 
@@ -42,7 +42,7 @@ pub fn advance_brood(brood: &mut Vec<BroodMember>, dt: f32, nest_pos: Vec2) -> V
                 BroodStage::Larva => {
                     // Larva matures into an adult ant
                     let caste = assign_caste();
-                    new_ants.push(Ant::new_with_caste(nest_pos, caste));
+                    new_ants.push(Ant::new_with_caste(nest_pos, caste, colony_id));
                     // swap_remove is O(1) and order doesn't matter
                     brood.swap_remove(i);
                     // don't increment i — the swapped element needs to be checked

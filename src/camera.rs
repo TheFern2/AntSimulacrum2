@@ -9,19 +9,31 @@ pub struct Camera {
 const ZOOM_MIN: f32 = 0.2;
 const ZOOM_MAX: f32 = 8.0;
 const ZOOM_SPEED: f32 = 0.1;
+const PAN_SPEED: f32 = 400.0; // pixels/second at zoom=1
 
 impl Camera {
     pub fn new(world_center: Vec2) -> Self {
         let screen_center = Vec2::new(screen_width() / 2.0, screen_height() / 2.0);
+        let zoom = 0.5;
         Self {
-            offset: screen_center - world_center,
-            zoom: 1.0,
+            offset: screen_center - world_center * zoom,
+            zoom,
             drag_start: None,
         }
     }
 
-    pub fn handle_input(&mut self, world_center: Vec2, ui_captured: bool) {
+    pub fn handle_input(&mut self, world_center: Vec2, ui_captured: bool, dt: f32) {
         if ui_captured { return; }
+
+        // Arrow keys to pan
+        let mut pan = Vec2::ZERO;
+        if is_key_down(KeyCode::Left)  { pan.x += 1.0; }
+        if is_key_down(KeyCode::Right) { pan.x -= 1.0; }
+        if is_key_down(KeyCode::Up)    { pan.y += 1.0; }
+        if is_key_down(KeyCode::Down)  { pan.y -= 1.0; }
+        if pan != Vec2::ZERO {
+            self.offset += pan * PAN_SPEED * dt;
+        }
         // Scroll to zoom (centered on mouse)
         let scroll = mouse_wheel().1;
         if scroll != 0.0 {

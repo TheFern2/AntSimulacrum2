@@ -17,7 +17,7 @@ const SPAWN_INTERVAL_MIN: f32 = 120.0;  // seconds between spawn events (min)
 const SPAWN_INTERVAL_MAX: f32 = 240.0;  // seconds between spawn events (max)
 const SPAWN_BATCH_MIN: usize = 1;       // sources dropped per spawn event (min)
 const SPAWN_BATCH_MAX: usize = 2;       // sources dropped per spawn event (max)
-const MAX_SOURCES: usize = 9;           // cap on total simultaneous food sources
+const MAX_SOURCES: usize = 18;          // cap on total simultaneous food sources
 const MIN_SOURCE_DIST: f32 = 80.0;      // minimum world-pixel spacing between source centers
 const SPAWN_SEARCH_DIST_MIN: f32 = 80.0;
 const SPAWN_SEARCH_DIST_MAX: f32 = 220.0;
@@ -119,15 +119,25 @@ pub struct Ecology {
 }
 
 impl Ecology {
-    /// Initialise with the two default food clusters; writes them into `world`.
+    /// Initialise with food clusters spread around the map; writes them into `world`.
     pub fn new(world: &mut World) -> Self {
         let w = world.width;
         let h = world.height;
 
         let mut sources = Vec::new();
-        // Top-right and bottom-left quadrants (matching previous hardcoded layout)
-        sources.push(FoodSource::new(w / 4 * 3, h / 4, world));
-        sources.push(FoodSource::new(w / 4, h / 4 * 3, world));
+        // Six initial food clusters spread to serve all three colonies.
+        // Positions are proportional so they scale with world size.
+        let initial_positions: &[(usize, usize)] = &[
+            (w / 2,         h / 2        ), // center
+            (w * 1 / 4,     h * 2 / 5    ), // left-center
+            (w * 3 / 4,     h * 2 / 5    ), // right-center
+            (w * 1 / 5,     h * 1 / 4    ), // top-left
+            (w * 4 / 5,     h * 1 / 4    ), // top-right
+            (w / 2,         h * 4 / 5    ), // bottom-center
+        ];
+        for &(gx, gy) in initial_positions {
+            sources.push(FoodSource::new(gx, gy, world));
+        }
 
         Ecology {
             sources,
