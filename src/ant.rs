@@ -18,10 +18,12 @@ const SOLDIER_PATROL_BAND: f32 = 20.0;     // ± tolerance before correction kic
 const NURSE_MAX_RANGE: f32 = 70.0;         // pixels — nurses don't wander further than this
 
 // Ant lifespans (seconds)
-const AGE_WORKER: f32 = 360.0;
-const AGE_SCOUT: f32 = 240.0;
-const AGE_SOLDIER: f32 = 480.0;
-const AGE_NURSE: f32 = 480.0;
+// Equilibrium population ≈ avg_lifespan / egg_interval (7.5s at max food)
+// These values target ~100 ants at steady state with full food supply.
+const AGE_WORKER: f32 = 720.0;
+const AGE_SCOUT: f32 = 480.0;
+const AGE_SOLDIER: f32 = 960.0;
+const AGE_NURSE: f32 = 960.0;
 
 // Starvation accelerates aging in Normal mode
 const STARVATION_AGE_MULT: f32 = 2.5;

@@ -4,10 +4,12 @@ use crate::ant::{Ant, AntState, Caste};
 use crate::brood::{BroodMember, BroodStage};
 use crate::camera::Camera;
 use crate::colony::Colony;
+use crate::ecology::Ecology;
 use crate::pheromone::{PheromoneGrid, MAX_INTENSITY};
 use crate::world::{Cell, World};
 
-const COLOR_BG: Color = Color { r: 0.102, g: 0.071, b: 0.031, a: 1.0 }; // #1a1208
+const COLOR_BG_DAY: Color   = Color { r: 0.102, g: 0.071, b: 0.031, a: 1.0 }; // #1a1208
+const COLOR_BG_NIGHT: Color = Color { r: 0.039, g: 0.039, b: 0.039, a: 1.0 }; // #0a0a0a
 const COLOR_WALL: Color = Color { r: 0.35, g: 0.35, b: 0.35, a: 1.0 };
 const COLOR_FOOD: Color = Color { r: 0.2, g: 0.8, b: 0.2, a: 1.0 };
 const COLOR_NEST_OUTER: Color = Color { r: 0.8, g: 0.6, b: 0.1, a: 0.4 };
@@ -25,11 +27,24 @@ pub fn draw_scene(
     camera: &Camera,
     pheromones: &PheromoneGrid,
     ants: &[Ant],
+    ecology: &Ecology,
 ) {
-    clear_background(COLOR_BG);
+    // Background lerps from day soil (#1a1208) to night dark (#0a0a0a)
+    let n = ecology.night_amount();
+    let bg = Color {
+        r: lerp(COLOR_BG_DAY.r, COLOR_BG_NIGHT.r, n),
+        g: lerp(COLOR_BG_DAY.g, COLOR_BG_NIGHT.g, n),
+        b: lerp(COLOR_BG_DAY.b, COLOR_BG_NIGHT.b, n),
+        a: 1.0,
+    };
+    clear_background(bg);
     draw_pheromones(world, camera, pheromones);
     draw_world_cells(world, camera);
     draw_ants(camera, ants);
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
 }
 
 fn draw_pheromones(world: &World, camera: &Camera, pheromones: &PheromoneGrid) {
@@ -130,6 +145,7 @@ pub fn draw_debug_overlay(
     ants: &[Ant],
     brood: &[BroodMember],
     decay_rate: f32,
+    ecology: &Ecology,
 ) {
     let workers  = ants.iter().filter(|a| a.caste == Caste::Worker).count();
     let scouts   = ants.iter().filter(|a| a.caste == Caste::Scout).count();
@@ -154,6 +170,14 @@ pub fn draw_debug_overlay(
     draw_text(&format!("Queen: {}  health: {:.0}%", colony.queen.status_label(), colony.queen.health * 100.0), 8.0, y, 18.0, WHITE); y += line;
     y += 4.0;
     draw_text(&format!("Decay: {:.3}/s  [Shift+↑/↓]", decay_rate), 8.0, y, 16.0, GRAY); y += 20.0;
+    let day_icon = if ecology.is_day() { "☀" } else { "☾" };
+    let time_in_day = ecology.day_time;
+    draw_text(
+        &format!("Day {} {}  ({:.0}s / {:.0}s)  Sources: {}",
+            ecology.day_count + 1, day_icon, time_in_day, ecology.day_length,
+            ecology.sources.len()),
+        8.0, y, 16.0, GRAY,
+    ); y += 20.0;
     draw_text("Shift+R: reset  |  Shift+M: toggle mode", 8.0, y, 16.0, GRAY);
 
     if colony.collapsed {

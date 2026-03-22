@@ -11,7 +11,7 @@
 Phase 1  Scaffold & Rendering     ██████████  [x] complete
 Phase 2  Ants & Pheromones        ██████████  [x] complete
 Phase 3  Colony & Lifecycle       ██████████  [x] complete
-Phase 4  Living Ecology           ░░░░░░░░░░  [ ] not started
+Phase 4  Living Ecology           ██████████  [x] complete
 Phase 5  Player Interaction & UI  ░░░░░░░░░░  [ ] not started
 Phase 6  Persistence & Web        ░░░░░░░░░░  [ ] not started
 ```
@@ -159,6 +159,16 @@ src/ecology.rs    FoodSource, spawning, regrowth, decay
 src/world.rs      extend: day/night state, time accumulator
 src/rendering.rs  extend: background color lerp for day/night
 ```
+
+### Implementation notes
+- `Ecology` owns all `FoodSource` objects; `World` no longer initializes any food cells
+- `FoodSource::new(center_gx, center_gy, world)` places a 7×7 grid patch and writes into `World` arrays directly
+- Regrowth rate: 1.5 units/s/cell (base); scaled by `day_modifier` (1.5× day → 0.5× night)
+- Saturation decay: after 30s at full max, `max_quantity` decreases at 0.3 units/s; floor is 5.0
+- Spawning: random timer 40–100s, parent-anchored 80–220px away, minimum 80px between source centers, cap 9 sources
+- Day/night: 300s/day; `night_amount = (1 - cos(day_time/day_length × τ)) / 2`; background lerps `#1a1208`→`#0a0a0a`
+- Debug overlay shows: day number, ☀/☾ icon, time-in-day, active source count
+- Shift+M and Shift+R both rebuild `ecology` (which reinitialises food in world)
 
 ### Done when
 Open app, watch for 5 minutes: new food sources appear naturally, existing ones deplete and regrow. Background visibly dims and brightens on cycle. Ants dynamically shift foraging routes as food landscape changes.

@@ -16,12 +16,11 @@ pub struct World {
     pub cell_size: f32,
 }
 
-const FOOD_INITIAL: f32 = 30.0;
 
 impl World {
     pub fn new(width: usize, height: usize, cell_size: f32) -> Self {
         let mut cells = vec![Cell::Empty; width * height];
-        let mut food_quantities = vec![0.0f32; width * height];
+        let food_quantities = vec![0.0f32; width * height];
 
         // Border walls
         for x in 0..width {
@@ -41,27 +40,7 @@ impl World {
             cells[15 * width + x] = Cell::Wall;
         }
 
-        // Food sources (top-right and bottom-left quadrants)
-        let food_cells: Vec<(usize, usize)> = {
-            let mut v = vec![];
-            for dy in -3i32..=3 {
-                for dx in -3i32..=3 {
-                    let fx = (width as i32 / 4 * 3 + dx) as usize;
-                    let fy = (height as i32 / 4 + dy) as usize;
-                    v.push((fx, fy));
-                    let fx2 = (width as i32 / 4 + dx) as usize;
-                    let fy2 = (height as i32 / 4 * 3 + dy) as usize;
-                    v.push((fx2, fy2));
-                }
-            }
-            v
-        };
-
-        for (fx, fy) in food_cells {
-            let idx = fy * width + fx;
-            cells[idx] = Cell::Food;
-            food_quantities[idx] = FOOD_INITIAL;
-        }
+        // Food sources are placed by Ecology::new — not here.
 
         let nest_pos = Vec2::new((width as f32 / 2.0) * cell_size, (height as f32 / 2.0) * cell_size);
 

@@ -4,6 +4,7 @@ mod ant;
 mod brood;
 mod camera;
 mod colony;
+mod ecology;
 mod pheromone;
 mod rendering;
 mod world;
@@ -12,6 +13,7 @@ use ant::{Ant, Caste};
 use brood::{advance_brood, BroodMember};
 use camera::Camera;
 use colony::{Colony, GameMode};
+use ecology::Ecology;
 use pheromone::{PheromoneGrid, DEFAULT_DECAY_RATE};
 use rendering::{draw_debug_overlay, draw_scene};
 use world::World;
@@ -53,6 +55,7 @@ fn make_ant_batch(nest: Vec2, count: usize) -> Vec<Ant> {
 #[macroquad::main(window_conf)]
 async fn main() {
     let mut world = make_world();
+    let mut ecology = Ecology::new(&mut world);
     let mut camera = Camera::new(world.nest_pos);
     let mut pheromones = PheromoneGrid::new(GRID_W, GRID_H);
     let mut ants = make_ant_batch(world.nest_pos, INITIAL_BATCH_SIZE);
@@ -69,6 +72,7 @@ async fn main() {
         // ── Debug controls ──────────────────────────────────────────────────
         if shift && is_key_pressed(KeyCode::R) {
             world = make_world();
+            ecology = Ecology::new(&mut world);
             pheromones = PheromoneGrid::new(GRID_W, GRID_H);
             ants = make_ant_batch(world.nest_pos, INITIAL_BATCH_SIZE);
             brood.clear();
@@ -82,6 +86,8 @@ async fn main() {
                 GameMode::Zen    => GameMode::Normal,
                 GameMode::Normal => GameMode::Zen,
             };
+            world = make_world();
+            ecology = Ecology::new(&mut world);
             colony = Colony::new(new_mode);
             ants = make_ant_batch(world.nest_pos, INITIAL_BATCH_SIZE);
             brood.clear();
@@ -111,6 +117,9 @@ async fn main() {
         }
 
         // ── Simulate ────────────────────────────────────────────────────────
+
+        // Ecology tick: regrowth, spawning, day/night clock
+        ecology.update(dt, &mut world);
 
         // Colony tick: consume food, queen health, lay eggs
         let new_eggs = colony.update(dt, ants.len(), brood.len());
@@ -148,8 +157,8 @@ async fn main() {
         }
 
         // ── Render ──────────────────────────────────────────────────────────
-        draw_scene(&world, &camera, &pheromones, &ants);
-        draw_debug_overlay(get_fps() as f32, &colony, &ants, &brood, decay_rate);
+        draw_scene(&world, &camera, &pheromones, &ants, &ecology);
+        draw_debug_overlay(get_fps() as f32, &colony, &ants, &brood, decay_rate, &ecology);
 
         next_frame().await;
     }
