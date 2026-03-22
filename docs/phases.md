@@ -10,7 +10,7 @@
 ```
 Phase 1  Scaffold & Rendering     ██████████  [x] complete
 Phase 2  Ants & Pheromones        ██████████  [x] complete
-Phase 3  Colony & Lifecycle       ░░░░░░░░░░  [ ] not started
+Phase 3  Colony & Lifecycle       ██████████  [x] complete
 Phase 4  Living Ecology           ░░░░░░░░░░  [ ] not started
 Phase 5  Player Interaction & UI  ░░░░░░░░░░  [ ] not started
 Phase 6  Persistence & Web        ░░░░░░░░░░  [ ] not started
@@ -76,7 +76,7 @@ This is the **core visual gate** — if this doesn't look cool, nothing else mat
   - `to_home`: blue `#0099ff` → transparent
 
 ### Implementation notes
-- `to_food` decays 2× faster than `to_home` (biologically accurate — recruitment vs orientation pheromone)
+- `to_food` and `to_home` decay at the same rate (unified for testing; reverted from 2× split)
 - Returning ants use a direct nest-homing pull (15–60% weight by distance) alongside pheromone steering to prevent orbital loops around the nest
 - Nest interaction radius = 44px (matches visual outer ring)
 - `gen` is a reserved keyword in Rust 2024 edition — use `r#gen` when calling `rand::Rng::gen`
@@ -100,22 +100,22 @@ src/rendering.rs    extend: draw ants (circle + direction tick), pheromone overl
 **Goal:** Colony grows organically over time. Queen lays eggs, brood matures, ants age and die.
 
 ### Tasks
-- [ ] `Colony` struct: `queen`, `food_stored: f32`, `population: u32`, `stats`
-- [ ] `Queen` struct: `health`, `egg_rate`, `last_egg_time` — lays eggs proportional to `food_stored`
-- [ ] `Brood` stages with timers:
+- [x] `Colony` struct: `queen`, `food_stored: f32`, `population: u32`, `stats`
+- [x] `Queen` struct: `health`, `egg_rate`, `last_egg_time` — lays eggs proportional to `food_stored`
+- [x] `Brood` stages with timers:
   - `Egg` (60s) → `Larva` (120s) → `Adult` (assigned caste)
-- [ ] Caste assignment on maturity — weighted distribution:
+- [x] Caste assignment on maturity — weighted distribution:
   - Worker 70%, Scout 10%, Soldier 10%, Nurse 10%
-- [ ] Caste-specific behavior:
+- [x] Caste-specific behavior:
   - `Worker`: standard forage loop (Phase 2 behavior)
   - `Scout`: 180° detection cone, higher liberty coefficient, +30% speed
-  - `Soldier`: patrol circle around nest (no foraging in v1)
-  - `Nurse`: stay near nest, shuttle food from `food_stored` to nearby larvae
-- [ ] Food consumption: each ant costs `food_per_tick` from `colony.food_stored`
-- [ ] Ant lifespan: each ant has `age` counter, dies at max age
-- [ ] **Normal mode**: starvation (`food_stored == 0`) accelerates aging; queen stops laying
-- [ ] **Zen mode**: minimum population floor (never below 10 workers); queen immortal
-- [ ] Colony collapse condition (Normal): queen dead + no brood + 0 workers → trigger end screen
+  - `Soldier`: patrol ring around nest (SOLDIER_PATROL_RADIUS = 85px, band ±20px)
+  - `Nurse`: stay within 70px of nest, move at 70% speed
+- [x] Food consumption: each ant costs `food_per_tick` from `colony.food_stored`
+- [x] Ant lifespan: each ant has `age` counter, dies at max age
+- [x] **Normal mode**: starvation (`food_stored == 0`) accelerates aging; queen stops laying
+- [x] **Zen mode**: minimum population floor (never below 10 workers); queen immortal
+- [x] Colony collapse condition (Normal): queen dead + no brood + 0 workers → trigger end screen
 
 ### Files
 ```
@@ -123,6 +123,15 @@ src/colony.rs    Colony, Queen structs, food economy
 src/brood.rs     Egg/Larva lifecycle, caste assignment
 src/ant.rs       extend: caste enum, lifespan, caste behaviors
 ```
+
+### Implementation notes
+- `food_stored` moved entirely to `Colony`; removed from `World`
+- Ant lifespan: Worker 360s, Scout 240s, Soldier/Nurse 480s
+- Starvation aging multiplier: 2.5× (Normal mode only)
+- Egg rate scales with food: 0.5× scarce → 2.0× abundant (base interval 15s)
+- Visual caste identification: Worker=amber, Scout=pale white-blue, Soldier=red, Nurse=lavender
+- Initial colony starts at 20 workers (INITIAL_ANT_COUNT) to allow growth to be visible
+- Zen minimum floor (10 workers) enforced by spawning workers directly at nest
 
 ### Done when
 Colony starts at 20 ants, grows to 100+ over ~10 minutes. Population fluctuates with food supply. In Normal mode, starving a colony kills it. In Zen mode, colony never fully dies.

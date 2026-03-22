@@ -1,14 +1,38 @@
 use macroquad::prelude::*;
 
+use crate::colony::{Colony, GameMode};
 use crate::pheromone::PheromoneGrid;
 use crate::world::World;
 
-const ANT_SPEED: f32 = 55.0; // pixels / second
-const WANDER_NOISE: f32 = std::f32::consts::PI / 6.0; // ±30° per tick jitter
+const ANT_SPEED: f32 = 55.0;                                  // pixels/second
+const WANDER_NOISE: f32 = std::f32::consts::PI / 6.0;         // ±30° per tick
 const NUM_SAMPLE_DIRS: usize = 32;
-const SAMPLE_DIST: f32 = 28.0; // pixels ahead for pheromone sampling
-const DEPOSIT_INTERVAL: f32 = 0.12; // seconds between deposits
-const NEST_RADIUS: f32 = 44.0; // matches visual outer ring (base_r * 2.2 at zoom=1)
+const SAMPLE_DIST: f32 = 28.0;                                 // pixels ahead for pheromone sampling
+const DEPOSIT_INTERVAL: f32 = 0.12;                            // seconds between deposits
+const NEST_RADIUS: f32 = 44.0;                                 // matches visual outer ring
+
+// Caste movement parameters
+const SCOUT_SPEED_MULT: f32 = 1.3;
+const SOLDIER_PATROL_RADIUS: f32 = 85.0;   // pixels from nest — target orbit distance
+const SOLDIER_PATROL_BAND: f32 = 20.0;     // ± tolerance before correction kicks in
+const NURSE_MAX_RANGE: f32 = 70.0;         // pixels — nurses don't wander further than this
+
+// Ant lifespans (seconds)
+const AGE_WORKER: f32 = 360.0;
+const AGE_SCOUT: f32 = 240.0;
+const AGE_SOLDIER: f32 = 480.0;
+const AGE_NURSE: f32 = 480.0;
+
+// Starvation accelerates aging in Normal mode
+const STARVATION_AGE_MULT: f32 = 2.5;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Caste {
+    Worker,
+    Scout,
+    Soldier,
+    Nurse,
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum AntState {
@@ -21,27 +45,87 @@ pub struct Ant {
     pub direction: f32, // radians
     pub state: AntState,
     pub carrying_food: bool,
-    liberty: f32, // [0..1] probability of skipping pheromone steering
+    pub caste: Caste,
+    pub age: f32,
+    pub max_age: f32,
+    liberty: f32,       // [0..1] probability of skipping pheromone steering each tick
     deposit_timer: f32,
 }
 
 impl Ant {
+    /// Create a Worker ant (backward-compatible with Phase 2 call sites).
     pub fn new(pos: Vec2) -> Self {
+        Self::new_with_caste(pos, Caste::Worker)
+    }
+
+    pub fn new_with_caste(pos: Vec2, caste: Caste) -> Self {
         use ::rand::Rng;
         let mut rng = ::rand::thread_rng();
+        let liberty = match caste {
+            Caste::Worker  => rng.gen_range(0.05f32..0.25),
+            Caste::Scout   => rng.gen_range(0.25f32..0.55),
+            Caste::Soldier | Caste::Nurse => rng.gen_range(0.05f32..0.15),
+        };
+        let max_age = match caste {
+            Caste::Worker  => AGE_WORKER,
+            Caste::Scout   => AGE_SCOUT,
+            Caste::Soldier => AGE_SOLDIER,
+            Caste::Nurse   => AGE_NURSE,
+        };
         Self {
             position: pos,
             direction: rng.gen_range(0.0..std::f32::consts::TAU),
             state: AntState::Foraging,
             carrying_food: false,
-            liberty: rng.gen_range(0.05f32..0.25),
+            caste,
+            age: 0.0,
+            max_age,
+            liberty,
             deposit_timer: rng.gen_range(0.0..DEPOSIT_INTERVAL),
         }
     }
 
-    pub fn update(&mut self, dt: f32, world: &mut World, pheromones: &mut PheromoneGrid) {
-        use ::rand::Rng;
+    /// Tick this ant. Returns `false` if the ant has died and should be removed.
+    pub fn update(
+        &mut self,
+        dt: f32,
+        world: &mut World,
+        pheromones: &mut PheromoneGrid,
+        colony: &mut Colony,
+    ) -> bool {
+        // Age — starvation accelerates aging in Normal mode
+        let age_mult = if colony.mode == GameMode::Normal && colony.is_starving() {
+            STARVATION_AGE_MULT
+        } else {
+            1.0
+        };
+        self.age += dt * age_mult;
+        if self.age >= self.max_age {
+            return false;
+        }
+
         let mut rng = ::rand::thread_rng();
+
+        match self.caste {
+            Caste::Soldier => self.update_guard(dt, world, &mut rng),
+            Caste::Nurse   => self.update_nurse(dt, world, &mut rng),
+            _              => self.update_forager(dt, world, pheromones, colony, &mut rng),
+        }
+
+        true
+    }
+
+    // ── Forager (Worker & Scout) ────────────────────────────────────────────
+
+    fn update_forager(
+        &mut self,
+        dt: f32,
+        world: &mut World,
+        pheromones: &mut PheromoneGrid,
+        colony: &mut Colony,
+        rng: &mut impl ::rand::Rng,
+    ) {
+        let speed = if self.caste == Caste::Scout { ANT_SPEED * SCOUT_SPEED_MULT } else { ANT_SPEED };
 
         // Deposit pheromone on current cell
         self.deposit_timer -= dt;
@@ -50,44 +134,47 @@ impl Ant {
             let gx = (self.position.x / world.cell_size) as i32;
             let gy = (self.position.y / world.cell_size) as i32;
             match self.state {
-                AntState::Foraging => pheromones.deposit_home(gx, gy, 0.3),
+                AntState::Foraging  => pheromones.deposit_home(gx, gy, 0.3),
                 AntState::Returning => pheromones.deposit_food(gx, gy, 0.3),
             }
         }
 
         // Pheromone steering (unless liberty roll fires)
-        if rng.r#gen::<f32>() >= self.liberty {
-            self.steer_by_pheromone(pheromones, world);
-        }
+        // Returns trail strength [0..1] so we can suppress noise on highways
+        let trail_strength = if rng.r#gen::<f32>() >= self.liberty {
+            let wide_cone = self.caste == Caste::Scout;
+            self.steer_by_pheromone(pheromones, world, wide_cone)
+        } else {
+            0.0
+        };
 
-        // Returning ants: direct pull toward nest (breaks pheromone-ring orbiting)
-        // Real ants use path integration alongside trail following.
+        // Returning ants: direct nest-homing pull (prevents pheromone-ring orbiting)
         if self.state == AntState::Returning {
             let to_nest = world.nest_pos - self.position;
             let dist = to_nest.length();
             if dist > 1.0 {
                 let nest_angle = f32::atan2(to_nest.y, to_nest.x);
-                // Pull grows stronger as ant approaches nest (0.15 far → 0.6 close)
                 let pull = 0.15 + 0.45 * (1.0 - (dist / 300.0).min(1.0));
                 let diff = angle_diff(nest_angle, self.direction);
                 self.direction += diff * pull;
             }
         }
 
-        // Random forward-cone jitter
-        self.direction += rng.gen_range(-WANDER_NOISE..WANDER_NOISE);
+        // Wander noise — suppressed when on a strong trail so ants stick to highways
+        // Strong trail (strength→1.0): noise reduced to ~15% of base
+        // No trail (strength=0.0):     full noise for exploration
+        let noise_scale = 1.0 - trail_strength * 0.85;
+        self.direction += rng.gen_range(-WANDER_NOISE..WANDER_NOISE) * noise_scale;
 
         // Attempt move
-        let vel = Vec2::new(self.direction.cos(), self.direction.sin()) * ANT_SPEED * dt;
+        let vel = Vec2::new(self.direction.cos(), self.direction.sin()) * speed * dt;
         let new_pos = self.position + vel;
-
         let gx = (new_pos.x / world.cell_size) as i32;
         let gy = (new_pos.y / world.cell_size) as i32;
 
         use crate::world::Cell;
         match world.get_checked(gx, gy) {
             None | Some(Cell::Wall) => {
-                // Bounce: reverse + small random nudge
                 self.direction += std::f32::consts::PI + rng.gen_range(-0.5f32..0.5);
             }
             Some(Cell::Food) => {
@@ -103,10 +190,12 @@ impl Ant {
             }
         }
 
-        // Nest interaction
-        if self.state == AntState::Returning && self.position.distance(world.nest_pos) < NEST_RADIUS {
+        // Nest interaction: deposit food, flip to Foraging
+        if self.state == AntState::Returning
+            && self.position.distance(world.nest_pos) < NEST_RADIUS
+        {
             if self.carrying_food {
-                world.food_stored += 1.0;
+                colony.deposit_food();
                 self.carrying_food = false;
             }
             self.state = AntState::Foraging;
@@ -114,8 +203,75 @@ impl Ant {
         }
     }
 
-    fn steer_by_pheromone(&mut self, pheromones: &mut PheromoneGrid, world: &World) {
-        let half_cone = std::f32::consts::FRAC_PI_4; // 45° each side = 90° cone
+    // ── Soldier (patrol ring around nest) ───────────────────────────────────
+
+    fn update_guard(&mut self, dt: f32, world: &mut World, rng: &mut impl ::rand::Rng) {
+        let to_nest = world.nest_pos - self.position;
+        let dist = to_nest.length();
+
+        if dist > SOLDIER_PATROL_RADIUS + SOLDIER_PATROL_BAND {
+            // Too far — pull inward
+            let pull_angle = f32::atan2(to_nest.y, to_nest.x);
+            self.direction += angle_diff(pull_angle, self.direction) * 0.5;
+        } else if dist < SOLDIER_PATROL_RADIUS - SOLDIER_PATROL_BAND && dist > 1.0 {
+            // Too close — push outward
+            let push_angle = f32::atan2(-to_nest.y, -to_nest.x);
+            self.direction += angle_diff(push_angle, self.direction) * 0.3;
+        }
+        // Within patrol band: tangential wander keeps them orbiting naturally
+        self.direction += rng.gen_range(-WANDER_NOISE * 0.5..WANDER_NOISE * 0.5);
+
+        self.move_simple(dt, world, rng, ANT_SPEED);
+    }
+
+    // ── Nurse (stay near nest) ───────────────────────────────────────────────
+
+    fn update_nurse(&mut self, dt: f32, world: &mut World, rng: &mut impl ::rand::Rng) {
+        let dist = self.position.distance(world.nest_pos);
+        if dist > NURSE_MAX_RANGE {
+            let to_nest = world.nest_pos - self.position;
+            let pull_angle = f32::atan2(to_nest.y, to_nest.x);
+            self.direction += angle_diff(pull_angle, self.direction) * 0.6;
+        }
+        self.direction += rng.gen_range(-WANDER_NOISE..WANDER_NOISE);
+        self.move_simple(dt, world, rng, ANT_SPEED * 0.7);
+    }
+
+    // ── Shared movement helper ───────────────────────────────────────────────
+
+    fn move_simple(&mut self, dt: f32, world: &mut World, rng: &mut impl ::rand::Rng, speed: f32) {
+        let vel = Vec2::new(self.direction.cos(), self.direction.sin()) * speed * dt;
+        let new_pos = self.position + vel;
+        let gx = (new_pos.x / world.cell_size) as i32;
+        let gy = (new_pos.y / world.cell_size) as i32;
+
+        use crate::world::Cell;
+        match world.get_checked(gx, gy) {
+            None | Some(Cell::Wall) => {
+                self.direction += std::f32::consts::PI + rng.gen_range(-0.5f32..0.5);
+            }
+            _ => {
+                self.position = new_pos;
+            }
+        }
+    }
+
+    // ── Pheromone steering ───────────────────────────────────────────────────
+
+    /// Steers toward the strongest pheromone in the forward cone.
+    /// Returns normalized trail strength [0..1] so callers can suppress wander noise.
+    fn steer_by_pheromone(
+        &mut self,
+        pheromones: &mut PheromoneGrid,
+        world: &World,
+        wide_cone: bool,
+    ) -> f32 {
+        // Scouts use 180° cone, others use 90°
+        let half_cone = if wide_cone {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            std::f32::consts::FRAC_PI_4
+        };
         let step = (2.0 * half_cone) / (NUM_SAMPLE_DIRS as f32 - 1.0);
 
         let mut best_dir = self.direction;
@@ -130,7 +286,7 @@ impl Ant {
             let gy = (sp.y / world.cell_size) as i32;
 
             let val = match self.state {
-                AntState::Foraging => pheromones.read_food(gx, gy),
+                AntState::Foraging  => pheromones.read_food(gx, gy),
                 AntState::Returning => pheromones.read_home(gx, gy),
             };
 
@@ -143,23 +299,26 @@ impl Ant {
         }
 
         if best_val > 0.01 {
-            // Smoothly rotate toward best direction
             let diff = angle_diff(best_dir, self.direction);
-            self.direction += diff * 0.4;
+            self.direction += diff * 0.65; // was 0.4 — stronger correction toward trail
 
-            // Degrade chosen cell to prevent oversaturation
+            // Degrade the chosen cell to prevent trail oversaturation
             match self.state {
-                AntState::Foraging => pheromones.degrade_food(best_gx, best_gy),
+                AntState::Foraging  => pheromones.degrade_food(best_gx, best_gy),
                 AntState::Returning => pheromones.degrade_home(best_gx, best_gy),
             }
+
+            return (best_val / crate::pheromone::MAX_INTENSITY).min(1.0);
         }
+
+        0.0
     }
 }
 
 fn angle_diff(target: f32, current: f32) -> f32 {
     use std::f32::consts::PI;
     let mut d = target - current;
-    while d > PI { d -= 2.0 * PI; }
+    while d > PI  { d -= 2.0 * PI; }
     while d < -PI { d += 2.0 * PI; }
     d
 }

@@ -14,7 +14,6 @@ pub struct World {
     pub food_quantities: Vec<f32>,
     pub nest_pos: Vec2,
     pub cell_size: f32,
-    pub food_stored: f32,
 }
 
 const FOOD_INITIAL: f32 = 30.0;
@@ -66,7 +65,7 @@ impl World {
 
         let nest_pos = Vec2::new((width as f32 / 2.0) * cell_size, (height as f32 / 2.0) * cell_size);
 
-        Self { width, height, cells, food_quantities, nest_pos, cell_size, food_stored: 0.0 }
+        Self { width, height, cells, food_quantities, nest_pos, cell_size }
     }
 
     pub fn get(&self, x: usize, y: usize) -> Cell {
