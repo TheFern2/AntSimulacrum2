@@ -24,3 +24,4 @@ tmp/
 # Added by cargo
 
 /target
+.grepai/
